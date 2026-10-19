@@ -5,7 +5,7 @@
 //    绕过 opencode.ai 未开放浏览器 CORS 的问题。
 
 import type { LlmRequestPayload } from "./llm-provider-adapter";
-import { needsServerProxy } from "./llm-provider-adapter";
+import { needsServerProxy } from "./llm-proxy-target";
 
 /**
  * 统一的出站请求出口。

@@ -9,6 +9,9 @@ import {
     stripHallucinatedTimestamps,
 } from "./api-helpers";
 import { resolveEnabledGenerationParameters } from "./generation-parameters";
+import { needsServerProxy } from "./llm-proxy-target";
+
+export { needsServerProxy };
 
 export type LlmProviderKind = "openai-compatible" | "anthropic" | "gemini";
 export type NativeToolProtocol = "openai-compatible" | "anthropic" | "gemini";
@@ -551,23 +554,6 @@ function buildOpenAICompatibleRequest(
     };
 }
 
-/**
- * 这些目标必须经本站 /api/llm-proxy 服务端转发：
- * 浏览器直连会被 CORS 拦住，或上游要求浏览器发不出来的头。
- *
- * 目前只有 OpenCode Zen/Go 网关（https://opencode.ai/zen/go/v1）：
- *   - 未开放浏览器 CORS；
- *   - 2025-09-05 起要求 `x-opencode-session` 头，缺失回 400 MissingSessionID。
- * 会话头由 app/api/llm-proxy/route.ts 在服务端补。
- */
-export function needsServerProxy(url: string): boolean {
-    try {
-        const host = new URL(url).hostname.toLowerCase();
-        return host === "opencode.ai" || host.endsWith(".opencode.ai");
-    } catch {
-        return false;
-    }
-}
 
 function shouldEchoReasoningContent(config: ApiConfig): boolean {
     const provider = config.provider.toLowerCase();
