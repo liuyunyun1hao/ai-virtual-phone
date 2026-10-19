@@ -16,6 +16,7 @@ import type {
 import { formatChatUiTime } from "@/lib/chat-time";
 import { generateCheckPhoneAssets } from "@/lib/checkphone-engine";
 import { clearPhoneSnapshot, loadPhoneSnapshot, savePhoneSnapshot } from "@/lib/checkphone-storage";
+import { amountCurrency, sumMoneyByCurrency } from "@/lib/currency-context";
 
 type CheckPhoneAssetsPageProps = {
   character: Character;
@@ -63,32 +64,6 @@ function getCardDisplayNumber(masked: string): string {
     suffix = suffix.padStart(4, "0");
   }
   return `•••• •••• •••• ${suffix}`;
-}
-
-function parseAssetAmount(amount: string): number {
-  const normalized = amount.replace(/[,\s¥￥]/g, "");
-  if (!normalized) return 0;
-  const sign = normalized.startsWith("-") ? -1 : 1;
-  const numeric = Number.parseFloat(normalized.replace(/^[+-]/, ""));
-  return Number.isFinite(numeric) ? sign * numeric : 0;
-}
-
-function formatAssetDelta(amount: number): string {
-  const sign = amount < 0 ? "-" : "+";
-  const absolute = Math.abs(amount);
-  const formatter = new Intl.NumberFormat("zh-CN", {
-    minimumFractionDigits: Number.isInteger(absolute) ? 0 : 2,
-    maximumFractionDigits: 2,
-  });
-  return `${sign} ¥${formatter.format(absolute)}`;
-}
-
-function formatAssetTotal(amount: number): string {
-  const formatter = new Intl.NumberFormat("zh-CN", {
-    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
-    maximumFractionDigits: 2,
-  });
-  return `¥ ${formatter.format(amount)}`;
 }
 
 function isSameLocalDay(date: Date, target: Date): boolean {
@@ -236,20 +211,8 @@ export function CheckPhoneAssetsPage({ character, onBack }: CheckPhoneAssetsPage
         : [],
     [activities, activeAccount],
   );
-  const todayDelta = useMemo(() => {
-    const today = new Date();
-    return activities.reduce((sum, activity) => {
-      const createdAt = new Date(activity.createdAt);
-      if (Number.isNaN(createdAt.getTime()) || !isSameLocalDay(createdAt, today)) return sum;
-      return sum + parseAssetAmount(activity.amount);
-    }, 0);
-  }, [activities]);
-  const totalAssets = useMemo(
-    () => accounts.reduce((sum, account) => sum + parseAssetAmount(account.balance), 0),
-    [accounts],
-  );
-  const todayDeltaLabel = useMemo(() => formatAssetDelta(todayDelta), [todayDelta]);
-  const totalAssetsLabel = useMemo(() => formatAssetTotal(totalAssets), [totalAssets]);
+  const todayDeltaLabel = useMemo(() => sumMoneyByCurrency(activities.filter(item => isSameLocalDay(new Date(item.createdAt), new Date())).map(item => ({ amount: item.amount, currency: amountCurrency(item.amount, amountCurrency(accounts.find(account => account.id === item.accountId)?.balance || "")) })), true), [activities, accounts]);
+  const totalAssetsLabel = useMemo(() => sumMoneyByCurrency(accounts.map(item => ({ amount: item.balance, currency: amountCurrency(item.balance) }))), [accounts]);
 
   const subtitle = selectedActivity
     ? selectedActivity.category

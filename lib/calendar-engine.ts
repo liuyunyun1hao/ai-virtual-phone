@@ -3,7 +3,7 @@ import type { ApiConfig, PresetConfig, RegexConfig, WorldBookConfig } from "./se
 import type { UserIdentity } from "@/components/settings/user-identity";
 import type { AssemblerInput, LLMMessage } from "./llm-prompt-assembler";
 import type { CalendarOwnerType, CalendarScheduleItem } from "./calendar-types";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import {
   loadBindingConfig,
   loadApiConfigs,

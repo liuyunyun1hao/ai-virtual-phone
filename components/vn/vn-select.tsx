@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useRef } from "react";
 import { ArrowLeft, ChevronDown, ImagePlus, MoreHorizontal } from "lucide-react";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import { DEFAULT_VN_SUMMARY_PROMPT } from "@/lib/vn-engine";
 import { DEFAULT_VN_BILINGUAL_PROMPT } from "@/lib/bilingual-prompt-defaults";
 import { loadMemoryConfig, saveMemoryConfig } from "@/lib/memory-storage";

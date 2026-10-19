@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Brain, MoreHorizontal, Sparkles } from "lucide-react";
 import { MemoryBankPage } from "./memory/memory-bank-page";
 import { VnAssetPage } from "./vn/vn-asset-page";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import { PageShell } from "./ui/page-shell";
 import { FeaturedCard, type FeaturedCardItem } from "./ui/card-grid";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";

@@ -1,8 +1,10 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // lib/kv-db.ts
 // Generic IndexedDB-backed key-value store with synchronous in-memory cache.
 // Replaces all localStorage usage to avoid the ~5-10MB quota limit.
 
 import Dexie from "dexie";
+import { physicalIdentityKey, logicalIdentityKey, isSharedIdentityKey, assertIdentityActive } from "./identity-runtime";
 
 class KvDatabase extends Dexie {
     entries!: Dexie.Table<{ key: string; value: string }, string>;
@@ -13,22 +15,33 @@ class KvDatabase extends Dexie {
 }
 
 const kvDb = new KvDatabase();
+if (typeof window !== "undefined") window.addEventListener("float-identity-silenced", () => kvDb.close());
 
 // ── In-memory cache ──
 const _cache = new Map<string, string>();
 let _hydrated = false;
-let _hydratePromise: Promise<void> | null = null;
-let _hydrateError: unknown = null;
-
-/** 每片水合多少条后让出一次主线程（见 hydrateKvDb 注释）。 */
-const HYDRATE_CHUNK_SIZE = 300;
-
-/**
- * 把控制权交还给浏览器一次，让开机动画的渲染和用户输入有机会插进来。
- * 水合本身不能分片（读到的必须整包），但「灌进内存缓存」这一步可以切片。
- */
-function yieldToMainThread(): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, 0));
+const failedWrites = new Set<string>();
+let lastFailureNotice = 0;
+function writeFailed(key: string, value: string): void {
+    if (_cache.get(key) !== value) return;
+    failedWrites.add(key);
+    if (typeof window !== "undefined" && Date.now() - lastFailureNotice > 15_000) {
+        lastFailureNotice = Date.now();
+        window.dispatchEvent(new CustomEvent("global-notice", { detail: "部分数据尚未保存，请保持页面打开、检查设备存储空间；返回页面时会重试。" }));
+    }
+}
+export async function retryFailedKvWrites(): Promise<void> {
+    for (const key of [...failedWrites]) {
+        const value = _cache.get(key);
+        if (value === undefined) { failedWrites.delete(key); continue; }
+        await kvSetAsync(key, value);
+    }
+}
+if (typeof window !== "undefined") {
+    window.addEventListener("focus", () => { void retryFailedKvWrites().catch(() => undefined); });
+    window.addEventListener("beforeunload", event => {
+        if (failedWrites.size) { event.preventDefault(); event.returnValue = ""; }
+    });
 }
 
 // ── Migration registry ──
@@ -52,20 +65,25 @@ export function registerDynamicPrefix(prefix: string): void {
 // from localStorage. Used by both initial hydration and late registration.
 function migrateLegacyKey(lsKey: string): void {
     if (typeof window === "undefined") return;
-    const raw = localStorage.getItem(lsKey);
+    const raw = identityLocalStorage.getItem(lsKey);
     if (raw === null) return;
-    if (_cache.get(lsKey) !== raw) {
-        _cache.set(lsKey, raw);
-        kvDb.entries.put({ key: lsKey, value: raw }).catch(() => {});
-    }
-    localStorage.removeItem(lsKey);
+    _cache.set(lsKey, raw);
+    // Cache equality is not proof of a committed write (a previous attempt may
+    // have failed). Keep the durable source until this exact value commits.
+    kvDb.entries.put({ key: physicalIdentityKey(lsKey), value: raw }).then(() => {
+        if (_cache.get(lsKey) === raw) failedWrites.delete(lsKey);
+        removeLegacyLocalStorageKeyIfValue(lsKey, raw);
+    }).catch(err => {
+        writeFailed(lsKey, raw);
+        console.warn("[KvDB] migration pending:", lsKey, err);
+    });
 }
 
 function migrateLegacyPrefix(prefix: string): void {
     if (typeof window === "undefined") return;
     const matched: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
+    for (let i = 0; i < identityLocalStorage.length; i++) {
+        const k = identityLocalStorage.key(i);
         if (k && k.startsWith(prefix)) matched.push(k);
     }
     for (const k of matched) migrateLegacyKey(k);
@@ -82,7 +100,7 @@ function isManagedLegacyKey(key: string): boolean {
 function removeLegacyLocalStorageKey(key: string): void {
     if (typeof window === "undefined") return;
     try {
-        localStorage.removeItem(key);
+        identityLocalStorage.removeItem(key);
     } catch {
         // Ignore localStorage cleanup failures; IndexedDB remains the source of truth.
     }
@@ -91,7 +109,7 @@ function removeLegacyLocalStorageKey(key: string): void {
 function removeLegacyLocalStorageKeyIfValue(key: string, value: string): void {
     if (typeof window === "undefined") return;
     try {
-        if (localStorage.getItem(key) === value) localStorage.removeItem(key);
+        if (identityLocalStorage.getItem(key) === value) identityLocalStorage.removeItem(key);
     } catch {
         // Ignore localStorage cleanup failures; IndexedDB remains the source of truth.
     }
@@ -105,7 +123,7 @@ function writeFallbackLocalStorage(key: string, value: string): void {
     if (typeof window === "undefined" || !isManagedLegacyKey(key)) return;
     if (value.length > LOCAL_STORAGE_MIRROR_MAX_LENGTH) return;
     try {
-        localStorage.setItem(key, value);
+        identityLocalStorage.setItem(key, value);
     } catch {
         // Ignore fallback persistence failures; in-memory cache is already updated.
     }
@@ -122,24 +140,31 @@ function isAbortLikeError(err: unknown): boolean {
 }
 
 // ── Hydration (call once at app startup) ──
-// 语义与 chat-storage 对齐：成功才置 _hydrated，失败清掉在途 promise 允许下次重试。
-// 此前失败也置 _hydrated=true：IndexedDB 一次临时读不出来，缓存就是空的，kvGet
-// 全部返回 null，「读取失败」和「本来就没有」无法区分——下一次任何整包
-// 读改写（如线下记录追加）都会拿空数据把 IndexedDB 里的真实历史覆盖掉。
+let hydrationPromise: Promise<void> | null = null;
 export function hydrateKvDb(): Promise<void> {
-    if (_hydrated || typeof window === "undefined") return Promise.resolve();
-    if (_hydratePromise) return _hydratePromise;
-    _hydratePromise = (async () => {
-        // Load existing IDB data into cache
-        const all = await kvDb.entries.toArray();
-        // 分片灌入内存：一次性同步循环写几十 MB 字符串是一条长任务，会把开机
-        // 动画（splash 是逐帧绘制的 canvas）的帧全部顶掉，表现为「开机卡住」。
-        // 每片让出一次主线程；数据量小的时候不会触发，零成本。
-        for (let index = 0; index < all.length; index += 1) {
-            const { key, value } = all[index];
-            if (!_cache.has(key)) _cache.set(key, value);
-            if ((index + 1) % HYDRATE_CHUNK_SIZE === 0 && index + 1 < all.length) {
-                await yieldToMainThread();
+    if (hydrationPromise) return hydrationPromise;
+    hydrationPromise = hydrateKvDbOnce();
+    return hydrationPromise;
+}
+async function hydrateKvDbOnce(): Promise<void> {
+    if (_hydrated || typeof window === "undefined") return;
+    const { resumeIdentityRecovery } = await import("./identity-recovery");
+    if (await resumeIdentityRecovery()) {
+        const { requestPhoneSessionRemount } = await import("./phone-session-protocol");
+        requestPhoneSessionRemount();
+        throw new Error("数据恢复已完成，请刷新进入");
+    }
+    try {
+        // Select keys before reading values: other identities may contain large
+        // inline media and must not be materialized just to discard them.
+        const keys = (await kvDb.entries.toCollection().primaryKeys())
+            .filter(key => logicalIdentityKey(key) !== null);
+        for (let offset = 0; offset < keys.length; offset += 32) {
+            const rows = await kvDb.entries.bulkGet(keys.slice(offset, offset + 32));
+            for (const row of rows) {
+                if (!row) continue;
+                const key = logicalIdentityKey(row.key);
+                if (key !== null && !_cache.has(key)) _cache.set(key, row.value);
             }
         }
 
@@ -149,23 +174,23 @@ export function hydrateKvDb(): Promise<void> {
 
         // Fixed keys
         for (const lsKey of _fixedKeys) {
-            const raw = localStorage.getItem(lsKey);
+            const raw = identityLocalStorage.getItem(lsKey);
             if (raw === null) continue;
             if (_cache.get(lsKey) !== raw) {
-                batch.push({ key: lsKey, value: raw });
+                batch.push({ key: physicalIdentityKey(lsKey), value: raw });
                 _cache.set(lsKey, raw);
             }
             removeKeys.add(lsKey);
         }
 
         // Dynamic prefix keys
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
+        for (let i = 0; i < identityLocalStorage.length; i++) {
+            const k = identityLocalStorage.key(i);
             if (!k || !matchesDynamicPrefix(k)) continue;
-            const raw = localStorage.getItem(k);
+            const raw = identityLocalStorage.getItem(k);
             if (raw !== null) {
                 if (_cache.get(k) !== raw) {
-                    batch.push({ key: k, value: raw });
+                    batch.push({ key: physicalIdentityKey(k), value: raw });
                     _cache.set(k, raw);
                 }
                 removeKeys.add(k);
@@ -173,24 +198,14 @@ export function hydrateKvDb(): Promise<void> {
         }
 
         if (batch.length > 0) await kvDb.entries.bulkPut(batch);
-        for (const k of removeKeys) localStorage.removeItem(k);
-    })().then(() => {
-        _hydrated = true;
-        _hydrateError = null;
-        _hydratePromise = null;
-    }).catch(err => {
-        // 不向上抛：既有调用方大多不接 catch。失败状态通过 isKvHydrated() /
-        // getKvHydrationError() 暴露，入口（MainApp）负责拦住用户并提供重试。
-        console.warn("[KvDB] hydration failed, will retry on next call:", err);
-        _hydrateError = err;
-        _hydratePromise = null;
-    });
-    return _hydratePromise;
-}
-
-/** 最近一次水合失败的错误（成功后清空）。配合 isKvHydrated() 判断失败态。 */
-export function getKvHydrationError(): unknown {
-    return _hydrateError;
+        for (const k of removeKeys) identityLocalStorage.removeItem(k);
+    } catch (err) {
+        console.warn("[KvDB] hydration error:", err);
+        throw err;
+    }
+    _hydrated = true;
+    const { initializePhoneIdentity } = await import("./identity-lifecycle");
+    await initializePhoneIdentity(_cache);
 }
 
 // ── Synchronous read (IndexedDB-backed in-memory cache only) ──
@@ -208,12 +223,15 @@ export function kvGet(key: string): string | null {
 
 // ── Write: update cache + fire-and-forget to IDB ──
 export function kvSet(key: string, value: string): void {
+    if (!isSharedIdentityKey(key)) assertIdentityActive();
     _cache.set(key, value);
     if (isManagedLegacyKey(key)) writeFallbackLocalStorage(key, value);
-    kvDb.entries.put({ key, value }).then(() => {
+    kvDb.entries.put({ key: physicalIdentityKey(key), value }).then(() => {
+        if (_cache.get(key) === value) failedWrites.delete(key);
         if (isManagedLegacyKey(key)) removeLegacyLocalStorageKeyIfValue(key, value);
     }).catch(err => {
-        writeFallbackLocalStorage(key, value);
+        if (_cache.get(key) === value) writeFallbackLocalStorage(key, value);
+        writeFailed(key, value);
         if (!isAbortLikeError(err)) {
             console.warn("[KvDB] put failed:", key, err);
         }
@@ -221,13 +239,16 @@ export function kvSet(key: string, value: string): void {
 }
 
 export async function kvSetAsync(key: string, value: string): Promise<void> {
+    if (!isSharedIdentityKey(key)) assertIdentityActive();
     _cache.set(key, value);
     if (isManagedLegacyKey(key)) writeFallbackLocalStorage(key, value);
     try {
-        await kvDb.entries.put({ key, value });
+        await kvDb.entries.put({ key: physicalIdentityKey(key), value });
+        if (_cache.get(key) === value) failedWrites.delete(key);
         if (isManagedLegacyKey(key)) removeLegacyLocalStorageKeyIfValue(key, value);
     } catch (err) {
-        writeFallbackLocalStorage(key, value);
+        if (_cache.get(key) === value) writeFallbackLocalStorage(key, value);
+        writeFailed(key, value);
         if (!isAbortLikeError(err)) {
             console.warn("[KvDB] put failed:", key, err);
         }
@@ -237,9 +258,11 @@ export async function kvSetAsync(key: string, value: string): Promise<void> {
 
 // ── Delete ──
 export function kvRemove(key: string): void {
+    if (!isSharedIdentityKey(key)) assertIdentityActive();
     _cache.delete(key);
+    failedWrites.delete(key);
     if (isManagedLegacyKey(key)) removeLegacyLocalStorageKey(key);
-    kvDb.entries.delete(key).catch(err =>
+    kvDb.entries.delete(physicalIdentityKey(key)).catch(err =>
         console.warn("[KvDB] delete failed:", key, err));
 }
 
@@ -254,4 +277,26 @@ export function kvKeysWithPrefix(prefix: string): string[] {
 
 export function kvEntries(): Array<{ key: string; value: string }> {
     return Array.from(_cache.entries()).map(([key, value]) => ({ key, value }));
+}
+
+/** Commit a legacy split and removal together; concurrent per-record edits win. */
+export async function migrateKvRecords(sourceKey: string, raw: string, records: Array<{ key: string; value: string }>): Promise<void> {
+    assertIdentityActive();
+    const source = physicalIdentityKey(sourceKey);
+    const added: typeof records = [];
+    await kvDb.transaction("rw", kvDb.entries, async () => {
+        if ((await kvDb.entries.get(source))?.value !== raw) return;
+        for (const record of records) {
+            const key = physicalIdentityKey(record.key);
+            if (await kvDb.entries.get(key)) continue;
+            await kvDb.entries.put({ key, value: record.value });
+            added.push(record);
+        }
+        await kvDb.entries.delete(source);
+    });
+    for (const record of added) if (!_cache.has(record.key)) _cache.set(record.key, record.value);
+    if (_cache.get(sourceKey) === raw && !(await kvDb.entries.get(source))) {
+        _cache.delete(sourceKey);
+        removeLegacyLocalStorageKeyIfValue(sourceKey, raw);
+    }
 }

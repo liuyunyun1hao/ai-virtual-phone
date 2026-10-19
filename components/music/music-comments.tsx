@@ -122,16 +122,16 @@ export default function MusicCommentsPage({ songId, title, artist, coverUrl, res
     const list = sort === "hot" && hotComments.length > 0 ? hotComments : comments;
 
     return (
-        <div className="mcmt-page">
+        <div className="mcmt-page mcmt-frost">
             {/* Header */}
             <div className="mcmt-nav">
-                <button className="music-player-close" onClick={onClose}>
+                <button className="music-player-close" onClick={onClose} aria-label="返回播放器">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                         <path d="M15 19 8 12l7-7" />
                     </svg>
                 </button>
-                <b>评论</b>
-                {total > 0 && <span className="mcmt-total">({total.toLocaleString()})</span>}
+                <div className="mcmt-nav-title"><b>评论</b>
+                {total > 0 && <span className="mcmt-total">{total.toLocaleString()} 条</span>}</div>
             </div>
 
             {/* Song card */}
@@ -148,13 +148,13 @@ export default function MusicCommentsPage({ songId, title, artist, coverUrl, res
             </div>
 
             {/* Sort pills */}
-            <div className="mcmt-sorts">
-                <button className="mcmt-sort" {...(sort === "hot" ? { "data-on": "" } : {})} onClick={() => setSort("hot")}>最热</button>
-                <button className="mcmt-sort" {...(sort === "new" ? { "data-on": "" } : {})} onClick={() => setSort("new")}>最新</button>
+            <div className="mcmt-sorts" role="group" aria-label="评论排序">
+                <button className="mcmt-sort" aria-pressed={sort === "hot"} {...(sort === "hot" ? { "data-on": "" } : {})} onClick={() => setSort("hot")}>最热</button>
+                <button className="mcmt-sort" aria-pressed={sort === "new"} {...(sort === "new" ? { "data-on": "" } : {})} onClick={() => setSort("new")}>最新</button>
             </div>
 
             {/* Comment list */}
-            <div className="mcmt-list">
+            <div className="mcmt-list" aria-busy={loading}>
                 {loading ? (
                     <div className="mcmt-hint">加载评论中...</div>
                 ) : list.length === 0 ? (
@@ -180,11 +180,12 @@ export default function MusicCommentsPage({ songId, title, artist, coverUrl, res
             <div className="mcmt-input-bar">
                 <input
                     className="mcmt-input"
-                    placeholder="说点什么…"
+                    placeholder="留下你的感受…"
+                    aria-label="评论内容"
                     value={draft}
                     maxLength={140}
                     onChange={e => setDraft(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && handleSend()}
+                    onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) handleSend(); }}
                 />
                 <button className="mcmt-send" onClick={handleSend} disabled={sending || !draft.trim()}>
                     {sending ? "…" : "发送"}
@@ -233,7 +234,7 @@ function CommentItem({ comment, songId, resType = 0 }: { comment: NeteaseComment
                     </span>
                 </div>
                 {(comment.replyCount ?? 0) > 0 && (
-                    <button className="mcmt-replies-toggle" onClick={toggleReplies}>
+                    <button className="mcmt-replies-toggle" aria-expanded={expanded} onClick={toggleReplies}>
                         {expanded ? "收起回复" : `查看 ${comment.replyCount} 条回复`}
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={expanded ? { transform: "rotate(180deg)" } : undefined}><path d="m6 9 6 6 6-6" /></svg>
                     </button>

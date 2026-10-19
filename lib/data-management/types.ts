@@ -43,7 +43,19 @@ export type LocalStorageSource = {
   label?: string;
 };
 
-export type DataSource = IndexedDbSource | KvSource | LocalStorageSource;
+export type BackupOwner = { kind: "shared" } | { kind: "user"; userId: string };
+export type IdentityBackupDirectory = {
+  mode: "current" | "all";
+  users: Array<{ id: string; name: string }>;
+};
+export type DataSource = (IndexedDbSource | KvSource | LocalStorageSource) & {
+  /** Unclassified data is backed up, but cannot safely be treated as disposable. */
+  preserveOnClear?: boolean;
+  /** Export-only routing, never changes the active app identity. */
+  backupOwner?: BackupOwner;
+  backupLegacyOwnerId?: string | null;
+  backupUserIds?: string[];
+};
 
 export type DataModuleDefinition = {
   id: DataModuleId;
@@ -95,7 +107,7 @@ export type LocalStorageSourceBackup = {
   records: { key: string; value: string }[];
 };
 
-export type SourceBackup = IndexedDbSourceBackup | KvSourceBackup | LocalStorageSourceBackup;
+export type SourceBackup = (IndexedDbSourceBackup | KvSourceBackup | LocalStorageSourceBackup) & { owner?: BackupOwner };
 
 export type ModulePayload = {
   moduleId: DataModuleId;
@@ -137,7 +149,10 @@ export type DataSnapshot = {
 export type BackupManifest = {
   format: "ai-phone-backup";
   /** 1 = media inlined as base64; 2 = media stored as separate binary entries (media/<ref>.bin). */
-  version: 1 | 2;
+  version: 1 | 2 | 3;
+  identities?: IdentityBackupDirectory;
+  /** v3 inventory prevents a missing source file from looking like a complete backup. */
+  files?: Array<{ path: string; hash: string }>;
   createdAt: string;
   origin: string;
   modules: Array<{
@@ -159,6 +174,9 @@ export type BackupEnvelope = {
 
 export type ImportOptions = {
   overwrite?: boolean;
+  overwriteShared?: boolean;
+  /** Unpartitioned v1/v2 backups have no reliable owner. Never guess the current user. */
+  legacyTarget?: "new" | "current";
 };
 
 export type ImportResult = {

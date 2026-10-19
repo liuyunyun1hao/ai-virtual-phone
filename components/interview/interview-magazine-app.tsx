@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 import type { UserIdentity } from "@/components/settings/user-identity";
 import {

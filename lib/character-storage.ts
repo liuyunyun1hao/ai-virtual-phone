@@ -1,9 +1,11 @@
 import type { Character, CanvasBgItem } from "./character-types";
 import { normalizeTimeZone } from "./character-time";
+import { canCurrentIdentityInteract } from "./identity-access";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 
 /** Thrown when a character card contains fields unsupported by the current schema */
 export const CHAR_BLOCKED_FIELDS = "CHAR_BLOCKED_FIELDS";
+export const CHARACTERS_UPDATED_EVENT = "chat-characters-updated";
 
 const STORAGE_KEY = "ai_phone_characters_v1";
 const BG_ITEMS_STORAGE_KEY = "ai_phone_bg_items_v1";
@@ -77,10 +79,15 @@ export function loadCharacters(): Character[] {
   }
 }
 
+export function loadInteractableCharacters(): Character[] {
+  return loadCharacters().filter(character => canCurrentIdentityInteract(character.id));
+}
+
 export function saveCharacters(chars: Character[]): void {
   if (typeof window === "undefined") return;
   kvSet(STORAGE_KEY, JSON.stringify(chars));
   _charsCache = null;
+  window.dispatchEvent(new Event(CHARACTERS_UPDATED_EVENT));
 }
 
 export function loadBackgroundItems(): CanvasBgItem[] {
@@ -148,11 +155,6 @@ export function exportCharacterAsJson(char: Character): void {
     tags: char.tags || [],
     wechatID: char.wechatID || "",
     timeZone: char.timeZone || "",
-    polaroidStyle: char.polaroidStyle ?? 0,
-    polaroidSize: char.polaroidSize || "random",
-    polaroidImageX: char.polaroidImageX ?? 50,
-    polaroidImageY: char.polaroidImageY ?? 50,
-    polaroidImageZoom: char.polaroidImageZoom ?? 1,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
@@ -188,22 +190,6 @@ export function parseCharacterFromJson(
       throw new Error(CHAR_BLOCKED_FIELDS);
     }
 
-    const polaroidStyle = typeof src.polaroidStyle === "number" && Number.isFinite(src.polaroidStyle)
-      ? Math.max(0, Math.min(4, Math.round(src.polaroidStyle)))
-      : undefined;
-    const polaroidSize = src.polaroidSize === "small" || src.polaroidSize === "medium" || src.polaroidSize === "large"
-      ? src.polaroidSize
-      : "random" as const;
-    const polaroidImageX = typeof src.polaroidImageX === "number" && Number.isFinite(src.polaroidImageX)
-      ? Math.max(0, Math.min(100, src.polaroidImageX))
-      : undefined;
-    const polaroidImageY = typeof src.polaroidImageY === "number" && Number.isFinite(src.polaroidImageY)
-      ? Math.max(0, Math.min(100, src.polaroidImageY))
-      : undefined;
-    const polaroidImageZoom = typeof src.polaroidImageZoom === "number" && Number.isFinite(src.polaroidImageZoom)
-      ? Math.max(1, Math.min(3, src.polaroidImageZoom))
-      : undefined;
-
     return {
       name: String(src.name ?? ""),
       persona: String(src.description ?? src.persona ?? ""),
@@ -212,11 +198,6 @@ export function parseCharacterFromJson(
       tags: Array.isArray(src.tags) ? src.tags.map(String) : [],
       wechatID: typeof src.wechatID === "string" && src.wechatID.trim() ? src.wechatID : undefined,
       timeZone: normalizeTimeZone(src.timeZone ?? src.timezone ?? src.time_zone),
-      polaroidStyle,
-      polaroidSize,
-      polaroidImageX,
-      polaroidImageY,
-      polaroidImageZoom,
     };
   } catch (e) {
     if (e instanceof Error && e.message === CHAR_BLOCKED_FIELDS) throw e;

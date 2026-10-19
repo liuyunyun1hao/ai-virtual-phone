@@ -5,7 +5,7 @@ import { Trash2, Zap, Clock, Users, Archive, AlertCircle, Search, Brain, FileTex
 import { ConfirmDialog } from "@/components/ui/modal";
 import { MemoryTimeline } from "./memory-timeline";
 import { Toggle } from "@/components/ui/form";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 import type { MemoryEntry, MemoryConfig } from "@/lib/memory-types";
 import { DEFAULT_CORE_MEMORY_PROMPT, DEFAULT_SUMMARIZATION_PROMPT } from "@/lib/memory-types";

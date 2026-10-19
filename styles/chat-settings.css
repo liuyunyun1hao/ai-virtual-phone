@@ -1,0 +1,156 @@
+/* Scoped to chat settings: grouped iOS lists, without a frosted header. */
+.chat-beauty-picker { position:relative;flex:none;color:var(--settings-ink);font-size:14px; }
+.chat-beauty-picker summary { list-style:none;display:flex;align-items:center;justify-content:space-between;gap:14px;min-width:86px;min-height:42px;padding:0 12px;border-radius:14px;background:var(--settings-control);cursor:pointer;user-select:none;box-sizing:border-box; }
+.chat-beauty-picker summary::-webkit-details-marker { display:none; }
+.chat-beauty-picker svg { width:16px;height:16px;flex:none; }
+.chat-beauty-picker-options { position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:150px;padding:5px;border-radius:18px;background:var(--settings-card);border:1px solid var(--settings-line);box-shadow:0 8px 24px #00000014; }
+.chat-beauty-picker-options button { display:flex;align-items:center;justify-content:space-between;width:100%;min-height:44px;padding:0 12px;border:0;border-radius:13px;background:transparent;color:inherit;font:inherit;cursor:pointer; }
+.chat-beauty-picker-options button svg { visibility:hidden; }
+.chat-beauty-picker-options button[aria-pressed=true] { background:var(--settings-control); }
+.chat-beauty-picker-options button[aria-pressed=true] svg { visibility:visible; }
+.chat-beauty-picker summary:focus-visible,.chat-beauty-picker-options button:focus-visible { outline:2px solid #3478f6;outline-offset:2px; }
+.chat-beauty-picker-options button:active { opacity:.72; }
+@media (hover:hover) { .chat-beauty-picker-options button:hover { opacity:.72; } }
+.imessage-settings-page {
+  --settings-bg: #f2f2f7; --settings-card: #fff; --settings-ink: #161618;
+  --settings-secondary: #85858b; --settings-line: rgba(60,60,67,.13); --settings-control: #e9e9ef;
+  --settings-button-edge: rgba(255,255,255,.9);
+  --c-text-title: var(--settings-ink); --c-text: var(--settings-ink); --c-icon: var(--settings-secondary);
+  --c-input: var(--settings-control); --c-page-body-bg: var(--settings-bg);
+  --c-panel:var(--settings-card); --c-border:var(--settings-line); --c-panel-border:var(--settings-line);
+  background: var(--settings-bg); color: var(--settings-ink); font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  .imessage-settings-page { color-scheme:dark; --settings-bg:#000; --settings-card:#1c1c1e; --settings-ink:#f5f5f7; --settings-secondary:#98989e; --settings-line:rgba(235,235,245,.15); --settings-control:#303034; --settings-button-edge:rgba(255,255,255,.22); }
+}
+.imessage-settings-page .page-header { background: transparent !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; box-shadow: none !important; border: 0; }
+.imessage-settings-page .page-header::before,.imessage-settings-page .page-header::after { content:none !important; }
+.imessage-settings-page > .page-header { pointer-events:none; }
+.imessage-settings-page > .page-header .page-back-btn { pointer-events:auto; }
+.imessage-settings-page > .page-body { padding-top:calc(var(--page-header-safe-top,48px) - 2px); }
+.chat-status-subpage { position:absolute; inset:0; z-index:10030; background:var(--settings-bg); }
+/* Subpages scroll as one surface: no fixed slab hiding previews or editors. */
+.imessage-settings-page .page-shell { overflow-y:auto; scrollbar-width:none; background:var(--settings-bg); }
+.imessage-settings-page .page-shell > .page-header { position:relative; inset:auto; flex:none; }
+.imessage-settings-page .page-shell > .page-body { padding-top:14px; overflow:visible; flex:1 0 auto; }
+.imessage-settings-page .modal-overlay { position:absolute; inset:0; padding:18px; }
+.imessage-settings-page .modal-dialog { max-width:100%; max-height:calc(100% - 24px); overflow-y:auto; }
+.chat-settings-editor { display:grid; gap:20px; padding:4px 18px 28px; }
+.chat-settings-editor .chat-bilingual-prompt-stack { max-height:none; overflow:visible; padding:0; }
+.chat-settings-editor .chat-bilingual-prompt-section { padding:16px; border-radius:20px; background:var(--settings-card); }
+.chat-settings-editor .chat-bilingual-prompt-textarea { min-height:210px; max-height:none; width:100%; resize:vertical; font-family:inherit; font-size:13px; line-height:1.65; }
+.imessage-settings-page .chat-bilingual-prompt-reset { color:var(--settings-ink); background:var(--settings-control); }
+.chat-screen-effects-page .screen-fx-sheet { max-height:none; padding:8px 18px 28px; border-radius:0; box-shadow:none; }
+.chat-screen-effects-page .screen-fx-list { overflow:visible; max-height:none; }
+.chat-screen-effects-page .screen-fx-card { background:var(--settings-card); border:0; border-radius:18px; box-shadow:none; }
+.chat-screen-effects-page .screen-fx-footer { position:static; background:transparent; }
+.imessage-settings-page .group-avatar-profile-picker { display:flex; flex-direction:column; align-items:center; gap:10px; }
+.group-avatar-profile-picker > .chat-settings-avatar { border:0; padding:0; flex:none; cursor:pointer; }
+.group-avatar-profile-picker .group-avatar-options { width:100%; padding:12px; border-radius:18px; background:var(--settings-card); }
+.imessage-settings-page .page-header-content { background:transparent; box-shadow:none; }
+.imessage-settings-page > .page-header .page-header-content { display:flex; justify-content:space-between; padding:8px 18px; }
+.imessage-settings-page .page-back-btn,.imessage-settings-page .settings-back { display:grid; place-items:center; width:42px; height:42px; min-width:42px; padding:0; border:1px solid var(--settings-button-edge); border-radius:50%; background:var(--settings-card); color:var(--settings-ink); box-shadow:0 2px 5px rgba(0,0,0,.025); cursor:pointer; }
+.imessage-settings-page > .page-header .page-title,.imessage-settings-page > .page-header .page-header-right { display:none; }
+.imessage-settings-page > .page-body { background:var(--settings-bg); }
+.imessage-settings-page .chat-info-menu { padding:0 18px max(30px,env(safe-area-inset-bottom)); max-width:620px; margin:0 auto; width:100%; box-sizing:border-box; }
+.chat-settings-profile { display:flex; flex-direction:column; align-items:center; padding:0 16px 24px; gap:12px; }
+.chat-settings-avatar { width:62px; height:62px; border-radius:50%; overflow:hidden; background:var(--settings-control); }
+.chat-settings-avatar > img { width:100%; height:100%; object-fit:cover; }
+.chat-settings-name { display:flex; align-items:center; justify-content:center; gap:4px; font-size:calc(13px * var(--app-text-scale,1)); font-weight:600; line-height:1.25; letter-spacing:-.3px; padding:0; border:0; background:none; color:var(--settings-ink); max-width:100%; overflow-wrap:anywhere; }
+.chat-settings-name-input { text-align:center; width:100%; outline:none; border-bottom:1px solid var(--settings-line); border-radius:0; }
+.chat-settings-name svg { flex-shrink:0; color:var(--settings-secondary); }
+.chat-settings-section { margin:0 0 23px; }
+.chat-settings-section > h2 { margin:0; padding:0 16px 8px; color:var(--settings-secondary); font-size:12px; font-weight:400; line-height:1.3; }
+.imessage-settings-page .chat-info-menu .menu-group { padding:0; margin:0; border-radius:20px; background:var(--settings-card); border:0; box-shadow:none; overflow:hidden; }
+/* Keep the open preset above later rows and outside the rounded card clip. */
+.imessage-settings-page .chat-info-menu .menu-group:has(.chat-beauty-picker[open]) { position:relative; z-index:2; overflow:visible; }
+.imessage-settings-page .chat-info-menu .menu-item:has(.chat-beauty-picker[open]) { z-index:2; }
+.imessage-settings-page .chat-info-menu .menu-item { display:flex; align-items:center; width:100%; gap:12px; min-height:53px; padding:12px 16px !important; box-sizing:border-box; background:transparent; color:var(--settings-ink); border:0; border-radius:0; position:relative; text-align:left; box-shadow:none; }
+.imessage-settings-page .chat-info-menu .menu-item:not(:last-child)::after { content:""; position:absolute; bottom:0; left:16px; right:0; height:.5px; background:var(--settings-line); }
+.imessage-settings-page .chat-info-menu .menu-item::before { display:none; }
+.imessage-settings-page .chat-info-menu button.menu-item:active { transform:none; opacity:.72; }
+.imessage-settings-page .chat-info-menu .menu-label-group { display:flex; flex-direction:column; flex:1; min-width:0; gap:4px; }
+.imessage-settings-page .chat-info-menu .menu-label { color:var(--settings-ink); font-size:15px; font-weight:400; line-height:1.3; }
+.imessage-settings-page .chat-info-menu .menu-desc { font-size:11px; line-height:1.4; color:var(--settings-secondary); font-weight:400; }
+.imessage-settings-page .chat-info-menu .menu-right { margin-left:auto; display:flex; align-items:center; justify-content:flex-end; gap:5px; flex-shrink:0; max-width:47%; color:var(--settings-secondary); }
+.imessage-settings-page .chat-info-menu .menu-right > .menu-desc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.imessage-settings-page .chat-info-menu .chat-info-icon { display:none; }
+.imessage-settings-page .chat-info-menu .menu-label-danger { color:#ff3b30; }
+.imessage-settings-page .ui-toggle { width:45px; height:27px; min-width:45px; border-radius:18px; padding:2px; background:var(--settings-control); box-shadow:none; border:0; }
+.imessage-settings-page .ui-toggle[data-checked] { background:#34c759; }
+.imessage-settings-page .ui-toggle-knob { width:23px; height:23px; border-radius:50%; background:white; box-shadow:0 1px 3px rgba(0,0,0,.15); transform:translateX(0); }
+.imessage-settings-page .ui-toggle[data-checked] .ui-toggle-knob { transform:translateX(18px); }
+.imessage-settings-page .ui-toggle:disabled { opacity:.4; }
+.imessage-settings-page .group-avatar-setting-row { display:flex; width:100%; padding:0; min-height:29px; background:none; border:0; color:inherit; gap:12px; }
+.imessage-settings-page .group-avatar-picker { width:100%; }
+.imessage-settings-page .ui-input,.imessage-settings-page .ui-textarea { background:var(--settings-control); border:0; border-radius:10px; color:var(--settings-ink); }
+.imessage-settings-page .modal-dialog { background:var(--settings-card); color:var(--settings-ink); border-radius:24px; box-shadow:0 12px 40px rgba(0,0,0,.12); }
+.imessage-settings-page .modal-overlay { background:rgba(0,0,0,.25); }
+.bubble-colors-page { position:absolute; inset:0; z-index:180; display:flex; flex-direction:column; overflow-y:auto; scrollbar-width:none; background:var(--settings-bg); color:var(--settings-ink); text-align:left; }
+.color-page-nav { display:flex; align-items:center; justify-content:space-between; flex:none; padding:calc(var(--page-header-safe-top, 36px) + 8px) 18px 10px; }
+.color-page-nav h1 { margin:0; font-size:17px; font-weight:600; }
+.color-page-body { overflow:visible; flex:none; padding:8px 20px 30px; max-width:460px; width:100%; margin:0 auto; box-sizing:border-box; }
+.color-segment { display:flex; padding:3px; border-radius:11px; background:var(--settings-control); gap:2px; }
+.color-segment button { min-width:0; flex:1; border:0; background:transparent; padding:8px 4px; border-radius:8px; font-size:13px; line-height:17px; color:var(--settings-ink); cursor:pointer; }
+.color-segment button[aria-pressed=true] { background:var(--settings-card); box-shadow:0 1px 3px rgba(0,0,0,.1); font-weight:600; }
+.color-preview { min-height:94px; display:flex; align-items:center; justify-content:center; padding:16px; }
+.color-preview > span { position:relative; padding:12px 18px; border-radius:21px; font-size:15px; }
+.color-preview i { position:absolute; bottom:0; right:-4px; width:14px; height:15px; clip-path:polygon(0 0,60% 0,60% 55%,100% 100%,25% 85%); }
+.color-auto-row { display:flex; gap:16px; justify-content:space-between; align-items:center; padding:14px 16px; margin:0 0 14px; background:var(--settings-card); border-radius:17px; }
+.color-auto-row strong { font-size:14px; font-weight:500; }
+.color-auto-row p { margin:4px 0 0; font-size:11px; line-height:1.4; color:var(--settings-secondary); }
+.color-editor { display:grid; gap:17px; border:0; margin:0; padding:18px; background:var(--settings-card); border-radius:23px; min-width:0; }
+.color-editor:disabled { opacity:.36; filter:grayscale(1); }
+.color-grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); aspect-ratio:1.2; border-radius:15px; overflow:hidden; }
+.color-grid button { padding:0; border:0; border-radius:0; min-width:0; cursor:pointer; position:relative; }
+.color-grid button[aria-pressed=true] { box-shadow:inset 0 0 0 2px white,inset 0 0 0 3px rgba(0,0,0,.35); z-index:1; }
+.color-grid button:focus-visible { outline:2px solid white; outline-offset:-3px; z-index:2; }
+.color-spectrum { aspect-ratio:1.2; border-radius:15px; background:linear-gradient(to bottom,rgba(255,255,255,.92),transparent 50%,rgba(0,0,0,.8)),linear-gradient(to right,red,#ff0,#0f0,#0ff,#00f,#f0f,red); touch-action:none; position:relative; }
+.color-spectrum > span { position:absolute; top:8px; right:8px; width:24px; height:24px; border-radius:50%; border:2px solid white; }
+.color-rgb { aspect-ratio:1.2; display:flex; flex-direction:column; justify-content:center; gap:25px; }
+.color-rgb label { display:flex; align-items:center; gap:10px; font-size:13px; }
+.color-rgb input { min-width:0; width:100%; accent-color:#0088ff; }
+.color-rgb output { width:30px; text-align:right; font-variant-numeric:tabular-nums; }
+.color-hex { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; color:var(--settings-secondary); }
+.color-hex input { width:90px; min-width:0; padding:8px; border:0; border-radius:9px; background:var(--settings-control); color:var(--settings-ink); font:13px ui-monospace,monospace; text-align:center; }
+.color-opacity > label { display:block; font-size:14px; font-weight:600; margin-bottom:10px; }
+.color-opacity > div { display:flex; align-items:center; gap:12px; }
+.color-opacity input { appearance:none; -webkit-appearance:none; min-width:0; width:100%; height:25px; margin:0; border-radius:15px; background:linear-gradient(to right,transparent,var(--picked-color)),repeating-conic-gradient(#bbb 0% 25%,white 0% 50%) 0/12px 12px; }
+.color-opacity input::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:29px; height:29px; border-radius:50%; border:3px solid white; background:var(--picked-color); box-shadow:0 1px 4px rgba(0,0,0,.2); }
+.color-opacity input::-moz-range-thumb { width:23px; height:23px; border-radius:50%; border:3px solid white; background:var(--picked-color); }
+.color-opacity output { width:54px; padding:8px 0; text-align:center; flex-shrink:0; background:var(--settings-control); border-radius:10px; font-size:13px; font-variant-numeric:tabular-nums; }
+.color-swatches { border-top:.5px solid var(--settings-line); padding-top:16px; display:flex; justify-content:space-between; gap:5px; }
+.color-swatches button { width:24px; height:24px; padding:0; border-radius:50%; border:.5px solid rgba(128,128,128,.3); }
+.color-footnote { padding:0 12px; margin:14px 0 0; font-size:11px; line-height:1.6; color:var(--settings-secondary); }
+.imessage-settings-page button:focus-visible { outline:2px solid #0088ff; outline-offset:2px; }
+@media (prefers-reduced-motion:reduce) { .imessage-settings-page * { transition:none !important; } }
+.color-preview > span { isolation:isolate; background:transparent; }
+.color-preview i { inset:0; width:auto; height:auto; border-radius:inherit; clip-path:none; z-index:-1; }
+.color-preview i::after { content:""; position:absolute; bottom:-7px; right:7px; width:18px; height:18px; background:inherit; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='45 29 18 18'%3E%3Cpath d='M47.78 40c.99 0 1.64.31 2.97 1.24.71.5 3.45 2.6 5.72 3.85 1.96 1.08 3.64 1.82 4.06 1.85 1.26.1 1.42-1.09.93-1.73-.49-.64-1.05-1.47-1.27-1.92-.48-1.01-.63-1.54-.63-3.05 0-1.86 1.32-3.24 2.36-4.16.09-.08.21-.18.35-.29.24-.19.47-.38.7-.57V29H45.98v11h1.8Z' fill='black'/%3E%3C/svg%3E") center / 100% 100% no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='45 29 18 18'%3E%3Cpath d='M47.78 40c.99 0 1.64.31 2.97 1.24.71.5 3.45 2.6 5.72 3.85 1.96 1.08 3.64 1.82 4.06 1.85 1.26.1 1.42-1.09.93-1.73-.49-.64-1.05-1.47-1.27-1.92-.48-1.01-.63-1.54-.63-3.05 0-1.86 1.32-3.24 2.36-4.16.09-.08.21-.18.35-.29.24-.19.47-.38.7-.57V29H45.98v11h1.8Z' fill='black'/%3E%3C/svg%3E") center / 100% 100% no-repeat; }
+.color-page-body > .color-segment { margin-bottom:14px; }
+.color-scope-page { padding:18px 16px; border-radius:22px; background:var(--settings-card); }
+.color-scope-page h2 { font-size:15px; font-weight:600; margin:6px 0 12px; }
+.color-scope-page p { font-size:12px; line-height:1.6; color:var(--settings-secondary); margin:10px 0 16px; }
+.color-scope-options { border-radius:14px; background:var(--settings-control); overflow:hidden; }
+.color-scope-options button,.color-history button { display:flex; width:100%; align-items:center; justify-content:space-between; text-align:left; gap:12px; background:transparent; color:var(--settings-ink); border:0; padding:14px 12px; }
+.color-scope-options button + button,.color-history button + button { border-top:.5px solid var(--settings-line); }
+.color-scope-options strong { font-size:14px; font-weight:500; }
+.color-scope-options small,.color-history small { display:block; font-size:11px; color:var(--settings-secondary); margin-top:4px; }
+.color-scope-options button[aria-pressed=true] > span:last-child { color:#0088ff; }
+.color-apply { border:0; border-radius:14px; width:100%; padding:13px; font-size:14px; background:#0088ff; color:white; }
+.color-history { border-radius:14px; background:var(--settings-control); max-height:360px; overflow:auto; }
+.color-history button { font-size:13px; }
+.color-history-dots { display:flex; gap:3px; }
+.color-history-dots i { width:22px; height:22px; border-radius:50%; border:.5px solid var(--settings-line); }
+.color-history button > span:nth-child(2) { flex:1; }
+.color-history-row { position:relative; overflow:hidden; }
+.color-history-row + .color-history-row { border-top:.5px solid var(--settings-line); }
+.color-history .color-history-delete { position:absolute; inset:0 0 0 auto; width:72px; justify-content:center; background:#ff3b30; color:white; }
+.color-history .color-history-entry { position:relative; display:flex; gap:12px; align-items:center; padding:14px 12px; background:var(--settings-control); border:0; touch-action:pan-y; transition:transform .16s ease-out; }
+.color-history-details { flex:1; min-width:0; }
+.color-history .color-history-entry button { padding:0; border:0; min-width:0; }
+.color-history .color-history-load { width:auto; align-self:stretch; }
+.color-history .color-history-name { font-size:13px; min-height:22px; overflow-wrap:anywhere; }
+.color-history-details input { width:100%; font-size:13px; border:0; border-bottom:1px solid var(--settings-secondary); background:transparent; color:var(--settings-ink); }
+.color-history .color-history-entry:active { transition:none; }
+@media(prefers-reduced-motion:reduce) { .color-history .color-history-entry { transition:none; } }

@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const ts=require('typescript');
+const context={exports:{}};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../lib/menu-reorder-animation.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
+function row(top,scale=1){return {offsetHeight:56,cleared:0,frames:null,style:{removeProperty(){}},removeAttribute(){this.cleared++;},getBoundingClientRect(){return {top,height:56*scale};},animate(frames,options){this.frames=frames;this.options=options;this.animation={cancel(){this.oncancel?.();}};return this.animation;}};}
+const moving=row(156),neighbor=row(100),still=row(212);
+const cancel=context.exports.settleMenuRows([moving,neighbor,still],new Map([[moving,180],[neighbor,100],[still,212]]),false);
+assert.equal(moving.frames[0].transform,'translate3d(0,24px,0)','Drop begins at the visible finger position, not the old slot');
+assert.equal(moving.frames[1].transform,'translate3d(0,0,0)');
+assert.equal(moving.options.duration,220);
+assert.equal(neighbor.frames,null);assert.equal(still.frames,null);
+moving.animation.onfinish();assert.equal(moving.cleared,1);cancel();assert.equal(moving.cleared,2);
+const scaled=row(100,.5);context.exports.settleMenuRows([scaled],new Map([[scaled,120]]),false);assert.equal(scaled.frames[0].transform,'translate3d(0,40px,0)');
+const reduced=row(100);context.exports.settleMenuRows([reduced],new Map([[reduced,180]]),true);assert.equal(reduced.frames,null);assert.equal(reduced.cleared,1);
+const menu=fs.readFileSync(path.join(__dirname,'../components/chat/sortable-plus-menu.tsx'),'utf8');
+assert.ok(menu.includes('useLayoutEffect'));assert.ok(menu.includes('node.scrollTop = pending.scroll'));
+console.log('PASS: menu drop retains visual position, settles into new order, respects scaling/reduced motion and cleans animations.');

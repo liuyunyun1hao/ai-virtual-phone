@@ -14,8 +14,10 @@ import { CustomAppFailurePanel, type CustomAppFailureDetail } from "@/components
 import { permissionLabelWithContext } from "@/lib/custom-app-permission-labels";
 import { registerCustomAppToolExecutor, type CustomAppToolExecutorPayload } from "@/lib/custom-app-tool-runtime";
 import { updateInstalledCustomAppFromMarket } from "@/lib/custom-app-market-update";
-import { loadCharacters } from "@/lib/character-storage";
-import { hydrateKvDb } from "@/lib/kv-db";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
+import { hydrateKvDb, kvGet, kvSet } from "@/lib/kv-db";
+import { assertIdentityActive, getCurrentIdentityId } from "@/lib/identity-runtime";
+import { assertCharacterIdentityAccess } from "@/lib/identity-access";
 import { ensureSettingsStorageHydrated } from "@/lib/settings-storage";
 import { getPwaHostedSafeArea, PWA_DISPLAY_MODE_CHANGED_EVENT } from "@/lib/pwa-display-mode";
 import {
@@ -129,6 +131,8 @@ function rewriteAssetRefs(html: string, app: InstalledCustomApp): string {
 }
 
 function createCustomAppSrcDoc(app: InstalledCustomApp, frameId: string, launchContext?: Record<string, unknown> | null, embedded = false): string {
+  let localSnapshot: Record<string, string> = {};
+  try { localSnapshot = JSON.parse(kvGet(`ai_phone_custom_app_data_v1:${app.id}/browser-storage`) ?? "{}"); } catch {}
   const body = rewriteAssetRefs(app.entryHtml.trim(), app);
   const base = /<html[\s>]/i.test(body)
     ? body
@@ -163,6 +167,16 @@ html, body { min-height: 100%; }
   var eventHandlers = {};
   var toolHandlers = {};
   var seq = 0;
+  var browserStorage = ${JSON.stringify(localSnapshot).replace(/</g, "\\u003c")};
+  var localShim = {
+    getItem: function(key){ key=String(key); return Object.prototype.hasOwnProperty.call(browserStorage,key) ? browserStorage[key] : null; },
+    setItem: function(key,value){ key=String(key); value=String(value); browserStorage[key]=value; request('app.localStorage.change',{key:key,value:value}).catch(reportError); },
+    removeItem: function(key){ key=String(key); delete browserStorage[key]; request('app.localStorage.change',{key:key,value:null}).catch(reportError); },
+    clear: function(){ browserStorage={}; request('app.localStorage.clear',{}).catch(reportError); },
+    key: function(index){ return Object.keys(browserStorage)[index] || null; }
+  };
+  Object.defineProperty(localShim,'length',{get:function(){return Object.keys(browserStorage).length;}});
+  Object.defineProperty(window,'localStorage',{value:localShim,configurable:false});
 
   // ── 首屏失败上报 ──
   // 沙盒里的异常既不冒泡到宿主 React，也不显示在界面上，出事就是一片白。
@@ -1052,7 +1066,23 @@ export function CustomAppRunner({
   }, [app]);
 
   const handleBridgeRequest = useCallback(async (action: string, payload: unknown): Promise<BridgeResult> => {
+    assertIdentityActive();
+    if (action === "app.localStorage.change" || action === "app.localStorage.clear") {
+      const key = `ai_phone_custom_app_data_v1:${app.id}/browser-storage`;
+      let snapshot: Record<string, string> = {};
+      try { snapshot = JSON.parse(kvGet(key) ?? "{}"); } catch {}
+      if (action === "app.localStorage.clear") snapshot = {};
+      else {
+        const change = payload as { key: string; value: string | null };
+        if (change.value === null) delete snapshot[String(change.key)];
+        else snapshot[String(change.key)] = String(change.value);
+      }
+      kvSet(key, JSON.stringify(snapshot)); return true;
+    }
     const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    const contextRecord = record.context && typeof record.context === "object" ? record.context as Record<string, unknown> : {};
+    const targetCharacter = String(contextRecord.characterId ?? record.characterId ?? "").trim();
+    if (targetCharacter) assertCharacterIdentityAccess(targetCharacter);
     const launchRecord = launchContext && typeof launchContext === "object" ? launchContext : {};
     const backgroundRecord = launchRecord.origin === "custom_app_background" && !record.origin
       ? { ...record, origin: "custom_app_background" }

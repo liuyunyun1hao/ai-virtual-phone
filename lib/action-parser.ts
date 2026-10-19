@@ -14,7 +14,7 @@ import {
 } from "./moments-storage";
 import { loadChatContacts, loadChatSessions, loadChatMessages, createOrGetSession, addChatContact } from "./chat-storage";
 import { parseAndSaveResponse } from "./follow-up-service";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { clearRequestsForCharacter, dispatchFriendRequestUpdated } from "./friend-request-storage";
 import { sendBrowserNotification } from "./browser-notification";
 import type { MomentPost, MomentComment } from "./moments-types";
@@ -40,7 +40,7 @@ export type ActionContext = {
 
 // ── Parser ──
 
-const ACTION_TAGS = ["朋友圈", "群消息", "评论", "回复", "消息", "私信"] as const;
+const ACTION_TAGS = ["相册转发", "相册头像", "相册评论", "朋友圈", "群消息", "评论", "回复", "消息", "私信"] as const;
 
 function normalizeActionQuotes(text: string): string {
     return text.replace(/[\u201C\u201D\u2018\u2019\u300C\u300D]/g, "\"");
@@ -178,7 +178,7 @@ export function parseActionTags(text: string): {
  */
 const KNOWN_ACTION_TAGS = [
     // 中文方括号格式
-    "朋友圈", "评论", "回复", "消息", "群消息", "私信",
+    "相册转发", "相册头像", "相册评论", "朋友圈", "评论", "回复", "消息", "群消息", "私信",
     // XML 格式 (AI 偶尔幻觉输出)
     "action_chat_message", "action_moments_post",
     "action_comment", "action_reply",
@@ -229,6 +229,23 @@ export async function dispatchActions(
             if (!effectiveCtx) { console.log("[ActionParser]", `SKIP: actor "${action.actor}" not found`); continue; }
             console.log("[ActionParser]", `dispatching: type=${action.type} charId=${effectiveCtx.characterId}`);
             switch (action.type) {
+                case "相册转发":
+                case "相册头像":
+                case "相册评论": {
+                    // Album permissions cannot be borrowed by naming an arbitrary actor.
+                    if (effectiveCtx.characterId !== context.characterId) {
+                        const group = loadChatSessions().find(s => s.id === context.sessionId && s.isGroup);
+                        if (context.sourceEngine !== "group_chat" || !group?.participantIds?.includes(effectiveCtx.characterId)) break;
+                    }
+                    const { executeAlbumAction } = await import("./photo-album-actions");
+                    const boundary = action.target?.lastIndexOf("|") ?? -1;
+                    if (boundary < 1) break; // An ID alone cannot authorize acting on replacement pixels.
+                    const assetId = action.target!.slice(0, boundary);
+                    const version = action.target!.slice(boundary + 1);
+                    if (!version) break;
+                    await executeAlbumAction(effectiveCtx.characterId, assetId, action.type === "相册转发" ? "forward" : action.type === "相册头像" ? "avatar" : "comment", action.content, version, context.signal);
+                    break;
+                }
                 case "朋友圈":
                     await dispatchMomentsPost(action, effectiveCtx);
                     break;

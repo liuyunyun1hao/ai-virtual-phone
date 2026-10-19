@@ -1,4 +1,5 @@
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
+import { supportedCurrency, currencySymbol, fetchExchangeRate, cnyAmount } from "./exchange-rates";
 import type { WalletAccountType, WalletCard, WalletPaymentInput, WalletPaymentResult, WalletState, WalletTransaction } from "./wallet-types";
 
 const WALLET_STATE_KEY = "ai_phone_wallet_state_v1";
@@ -96,6 +97,7 @@ function normalizeTransaction(value: unknown): WalletTransaction | null {
   return {
     id,
     cardId,
+    currency: supportedCurrency(record.currency),
     accountType: rawAccountType === "card" || rawAccountType === "balance" ? rawAccountType : getAccountType(cardId),
     title,
     amount: normalizeSignedMoney(record.amount),
@@ -114,6 +116,7 @@ function normalizeWalletState(state: WalletState): WalletState {
   const defaultCardId = cards.some(card => card.id === state.defaultCardId) ? state.defaultCardId : cards[0].id;
   return {
     balance: normalizeMoney(state.balance),
+    currency: supportedCurrency(state.currency),
     cards: cards.map(card => ({
       ...card,
       isDefault: card.id === defaultCardId,
@@ -130,9 +133,11 @@ export function createDefaultWalletState(): WalletState {
   const card = createDefaultWalletCard(now);
   return {
     balance: DEFAULT_WALLET_BALANCE,
+    currency: "CNY",
     cards: [card],
     transactions: [{
       id: "wallet_initial_balance",
+      currency: "CNY",
       cardId: WALLET_BALANCE_ACCOUNT_ID,
       accountType: "balance",
       title: "初始余额",
@@ -165,6 +170,7 @@ function migrateLegacyParsedState(parsed: Record<string, unknown>): WalletState 
     : [];
   const defaultCardId = cleanText(parsed.defaultCardId, 120);
   return normalizeWalletState({
+    currency: supportedCurrency(parsed.currency),
     balance,
     cards: normalizedCards,
     transactions,
@@ -202,9 +208,9 @@ export function saveWalletState(state: WalletState): WalletState {
   return next;
 }
 
-export function formatWalletAmount(amount: number): string {
+export function formatWalletAmount(amount: number, currency = loadWalletState().currency || "CNY"): string {
   const safeAmount = normalizeMoney(amount);
-  return `¥${safeAmount.toLocaleString("zh-CN", {
+  return `${currency === "CNY" ? "" : `${currency} `}${currencySymbol(currency)}${safeAmount.toLocaleString("zh-CN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -212,6 +218,25 @@ export function formatWalletAmount(amount: number): string {
 
 export function getWalletBalance(state: WalletState): number {
   return normalizeMoney(state.balance);
+}
+
+export async function changeWalletCurrency(currency: string): Promise<WalletPaymentResult> {
+  const current = loadWalletState(), target = supportedCurrency(currency), source = supportedCurrency(current.currency);
+  if (source === target) return { ok: true, state: current };
+  const snapshot = JSON.stringify(current);
+  const rate = await fetchExchangeRate(source, target);
+  const latest = loadWalletState();
+  if (!rate) return { ok: false, state: latest, error: "汇率查询失败，钱包币种和余额未变。" };
+  if (JSON.stringify(latest) !== snapshot) return { ok: false, state: latest, error: "查询期间钱包发生变化，请重新切换币种。" };
+  const now = new Date().toISOString();
+  const state = saveWalletState({ ...current, currency: target,
+    balance: cnyAmount(current.balance, rate),
+    cards: current.cards.map(card => ({ ...card, balance: cnyAmount(card.balance, rate), updatedAt: now })),
+    transactions: [{ id: generateWalletId("wallet_fx"), cardId: WALLET_BALANCE_ACCOUNT_ID, accountType: "balance", currency: target,
+      title: "钱包币种切换", amount: 0, kind: "adjustment", category: "汇率", createdAt: now,
+      detail: `${source} → ${target}，参考汇率 ${rate}；余额及银行卡按此汇率折算`, balanceAfter: cnyAmount(current.balance, rate) }, ...current.transactions],
+  });
+  return { ok: true, state };
 }
 
 export function getWalletTotalBalance(state: WalletState): number {
@@ -277,6 +302,7 @@ function createTransaction(input: {
 }): WalletTransaction {
   return {
     id: generateWalletId("wallet_tx"),
+    currency: supportedCurrency(loadWalletState().currency),
     cardId: input.accountId,
     accountType: input.accountType,
     title: cleanText(input.title, 120),

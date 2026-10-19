@@ -1,9 +1,10 @@
+import { identityIndexedDbFactory, identityDatabaseName } from "@/lib/identity-runtime";
 // Resilient IndexedDB open.
 //
 // Several stores open their database at a fixed version constant. The data
 // backup/restore engine, however, bumps a database's version whenever it needs to
 // create object stores. After restoring into a fresh browser the stored version
-// can end up HIGHER than the code's constant, and `indexedDB.open(name, fixed)`
+// can end up HIGHER than the code's constant, and `identityIndexedDbFactory().open(identityDatabaseName(name), fixed)`
 // then fails with "An attempt was made to open a database using a lower version
 // than the existing version." — breaking that whole store.
 //
@@ -21,7 +22,7 @@ export function openIndexedDbAtLeast(
     new Promise((resolve, reject) => {
       let req: IDBOpenDBRequest;
       try {
-        req = version ? indexedDB.open(name, version) : indexedDB.open(name);
+        req = version ? identityIndexedDbFactory().open(identityDatabaseName(name), version) : identityIndexedDbFactory().open(identityDatabaseName(name));
       } catch (err) {
         reject(err);
         return;

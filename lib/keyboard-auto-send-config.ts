@@ -1,3 +1,4 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // 「收起键盘自动触发回复」的独立配置。
 // 刻意不复用 settings-storage：整个功能只由新增文件 + 少量纯插入组成，
 // 与主设置文件互不影响，全部关闭时行为与原版完全一致。
@@ -31,7 +32,7 @@ export function normalizeDebounceMs(value: unknown, fallback = DEFAULT_DEBOUNCE_
 export function loadKeyboardAutoSendConfig(): KeyboardAutoSendConfig {
     if (typeof window === "undefined") return { sessionEnabled: {}, sessionDebounceMs: {} };
     try {
-        const raw = localStorage.getItem(CONFIG_KEY);
+        const raw = identityLocalStorage.getItem(CONFIG_KEY);
         if (!raw) return { sessionEnabled: {}, sessionDebounceMs: {} };
         const saved = JSON.parse(raw) as Partial<KeyboardAutoSendConfig>;
         const enabledMap: Record<string, boolean> = {};
@@ -54,7 +55,7 @@ export function loadKeyboardAutoSendConfig(): KeyboardAutoSendConfig {
 }
 
 function saveConfig(config: KeyboardAutoSendConfig): void {
-    try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch { /* ignore */ }
+    try { identityLocalStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch { /* ignore */ }
 }
 
 /** 该会话是否开启了收起键盘自动触发（缺省关）。 */

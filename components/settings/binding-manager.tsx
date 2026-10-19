@@ -60,6 +60,9 @@ import {
 } from "@/lib/settings-storage";
 import { hydrateKvDb } from "@/lib/kv-db";
 import type { UserIdentity } from "@/components/settings/user-identity";
+import { switchPhoneIdentity } from "@/lib/identity-lifecycle";
+import { getCharacterIdentityAccess, setCharacterIdentityAccess } from "@/lib/identity-access";
+import { getCurrentIdentityId, hasActiveIdentity } from "@/lib/identity-runtime";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 
@@ -104,6 +107,8 @@ const canBindRegexInApp = (appId: string | null | undefined): boolean => (
 );
 
 export function BindingManager() {
+    const [identityBusy, setIdentityBusy] = useState(false);
+    const [identityError, setIdentityError] = useState("");
     const { setSubpageTitle, setOverrideBack } = useContext(SettingsContext);
 
     const [config, setConfig] = useState<BindingConfig>({ globalDefaults: {}, characterBindings: [] });
@@ -204,7 +209,7 @@ export function BindingManager() {
             // （API=第一个配置、预设=内置、身份=第一条），界面显示的就是实际生效的
             if (apiConfigs.length > 0 && !gd.apiConfigId) { gd.apiConfigId = apiConfigs[0].id; dirty = true; }
             if (presets.length > 0 && !gd.presetId) { gd.presetId = (presets.find(p => p.builtIn) ?? presets[0]).id; dirty = true; }
-            if (identities.length > 0 && !gd.userIdentityId) { gd.userIdentityId = identities[0].id; dirty = true; }
+            gd.userIdentityId = getCurrentIdentityId() ?? undefined;
             const newAppDefaults: Record<string, BindingSlot> = {};
             for (const [appId, slot] of Object.entries(prev.appDefaults ?? {})) {
                 if (!slot) continue;
@@ -242,7 +247,7 @@ export function BindingManager() {
                 dirty = true;
             }
             if (dirty) {
-                saveBindingConfig(next);
+                if (hasActiveIdentity()) saveBindingConfig(next);
                 return next;
             }
             return prev;
@@ -278,6 +283,15 @@ export function BindingManager() {
     };
 
     const updateGlobalSlot = (field: keyof BindingSlot, value: string | string[] | undefined) => {
+        if (field === "userIdentityId" && typeof value === "string") {
+            if (value === getCurrentIdentityId()) return;
+            setIdentityBusy(true); setIdentityError("");
+            void switchPhoneIdentity(value).catch(error => {
+                setIdentityError(error instanceof Error ? error.message : "身份切换失败");
+                setIdentityBusy(false);
+            });
+            return;
+        }
         const newGlobal = { ...config.globalDefaults, [field]: value || undefined };
         persist({ ...config, globalDefaults: newGlobal });
     };
@@ -352,6 +366,11 @@ export function BindingManager() {
     };
 
     const handleUpdate = (field: keyof BindingSlot, value: string | string[] | undefined) => {
+        if (field === "userIdentityId" && level !== "global") {
+            setCharacterIdentityAccess(selectedCharId, Array.isArray(value) ? value : value ? [value] : []);
+            setConfig({ ...config });
+            return;
+        }
         if (level === "global") updateGlobalSlot(field, value);
         else if (level === "character") updateCharDefaultSlot(field, value);
         else if (level === "app") updateAppSlot(field, value);
@@ -425,7 +444,7 @@ export function BindingManager() {
             case "apiConfigId": return "API 配置";
             case "voiceConfigId": return "语音 API";
             case "presetId": return "预设";
-            case "userIdentityId": return "用户身份";
+            case "userIdentityId": return level === "global" ? "当前用户身份" : "可互动身份";
             case "worldBookIds": return "世界书";
             case "regexIds": return "正则规则";
         }
@@ -436,7 +455,7 @@ export function BindingManager() {
             case "apiConfigId": return "全局文本生成接口";
             case "voiceConfigId": return "全局语音合成接口";
             case "presetId": return "全局提示词预设";
-            case "userIdentityId": return "全局用户身份";
+            case "userIdentityId": return level === "global" ? "切换整部手机的用户身份" : "未专绑时所有身份可互动";
             case "worldBookIds": return "全局启用的世界书";
             case "regexIds": return "全局启用的正则规则";
         }
@@ -500,6 +519,10 @@ export function BindingManager() {
     };
 
     const getSlotFieldDisplay = (slot: BindingSlot, field: BindingField, emptyText: string): { text: string; isEmpty: boolean; isInherited: boolean } => {
+        if (field === "userIdentityId" && level !== "global") {
+            const ids = getCharacterIdentityAccess(selectedCharId);
+            return { text: ids.length ? identities.filter(identity => ids.includes(identity.id)).map(identity => identity.name).join("、") : "所有身份可互动", isEmpty: false, isInherited: false };
+        }
         const current = getSlotFieldValueDisplay(slot, field);
         if (!current.isEmpty) return { ...current, isInherited: false };
         const inherited = getSlotFieldValueDisplay(inheritedSlot, field);
@@ -619,7 +642,7 @@ export function BindingManager() {
                 <div className="binding-global-compact-row" data-count={compactFields.length}>
                     {compactFields.map(field => renderBindingCard(field, "small"))}
                 </div>
-                {renderBindingCard("userIdentityId", "wide")}
+                {level !== "app" && renderBindingCard("userIdentityId", "wide")}
             </div>
         );
     };
@@ -664,6 +687,7 @@ export function BindingManager() {
             <div className="modal-overlay" data-ui="modal" onClick={() => setActiveGlobalSheetField(null)}>
                 <div
                     className="binding-picker-dialog"
+                    data-identity-picker={field === "userIdentityId" ? "true" : undefined}
                     role="dialog"
                     aria-modal="true"
                     aria-label={`选择${label}`}
@@ -743,10 +767,11 @@ export function BindingManager() {
         const field = activeSlotSheetField;
         const label = getBindingFieldLabel(field);
         const options = getBindingFieldOptions(field);
-        const isMulti = isMultiBindingField(field);
-        const selectedIds = isMulti ? ((currentSlot[field as MultiBindingField] || []).filter(id => options.some(item => item.id === id))) : [];
+        const isAccess = field === "userIdentityId" && level !== "global";
+        const isMulti = isAccess || isMultiBindingField(field);
+        const selectedIds = isAccess ? getCharacterIdentityAccess(selectedCharId) : isMulti ? ((currentSlot[field as MultiBindingField] || []).filter(id => options.some(item => item.id === id))) : [];
         const selectedValue = !isMulti ? currentSlot[field as SingleBindingField] : undefined;
-        const emptyLabel = level === "global" ? "未设置" : getInheritedFieldLabel(field, inheritLabel);
+        const emptyLabel = isAccess ? "所有身份可互动" : level === "global" ? "未设置" : getInheritedFieldLabel(field, inheritLabel);
 
         const clearSelection = () => {
             handleUpdate(field, undefined);
@@ -765,6 +790,7 @@ export function BindingManager() {
             <div className="modal-overlay" data-ui="modal" onClick={() => setActiveSlotSheetField(null)}>
                 <div
                     className="binding-picker-dialog"
+                    data-identity-picker={field === "userIdentityId" ? "true" : undefined}
                     role="dialog"
                     aria-modal="true"
                     aria-label={`选择${label}`}
@@ -992,6 +1018,8 @@ export function BindingManager() {
                 </>
             )}
             {renderGlobalPickerSheet()}
+            {identityBusy && <p role="status" className="menu-desc">正在备份数据并切换身份…</p>}
+            {identityError && <p role="alert" className="menu-desc">{identityError}</p>}
             {renderSlotPickerDialog()}
             {renderAuxPickerDialog()}
             {renderCharacterPickerDialog()}

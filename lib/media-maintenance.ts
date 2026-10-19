@@ -1,7 +1,13 @@
 "use client";
+import { identityDatabaseName } from "@/lib/identity-runtime";
+import { identityLocalStorage } from "@/lib/identity-runtime";
+
 
 import { chatDb } from "./chat-db";
-import { updateChatMessage, type ChatMessage } from "./chat-storage";
+import { collectPhotoAlbumAssets, isFavoriteChatPhoto, type PhotoAlbumAsset } from "./photo-album-storage";
+import { relocatePhotoMedia } from "./photo-album-core";
+import { getAlbumDiscussion, saveAlbumDiscussion } from "./photo-album-discussion";
+import { updateChatMessage, loadChatMessages, type ChatMessage } from "./chat-storage";
 import { DATA_MODULES } from "./data-management/modules";
 import { estimateValueBytes } from "./data-management/serializers";
 import { openIndexedDbAtLeast } from "./idb-open";
@@ -219,7 +225,7 @@ async function persistChatMediaPatch(
   await chatDb.messages.put(cached ?? nextMessage);
 }
 
-async function compactChatImage(message: ChatMessage, nowIso: string): Promise<{ changed: boolean; freedBytes: number }> {
+async function compactChatImage(message: ChatMessage, nowIso: string, albumAsset?: PhotoAlbumAsset): Promise<{ changed: boolean; freedBytes: number }> {
   const mediaUrl = message.mediaUrl;
   const mediaRef = message.mediaData?.imageGenerationMediaRef;
   let sourceBlob: Blob | null = null;
@@ -263,13 +269,14 @@ async function compactChatImage(message: ChatMessage, nowIso: string): Promise<{
   const nextBlob = compressed ?? sourceBlob;
   const nextMime = nextBlob.type || sourceMime;
   const nextRef = compressed || !sourceRef ? await storeMediaBlob(nextBlob, nextMime, "image") : sourceRef;
-  if (sourceRef && nextRef === sourceRef) refsToDelete.delete(sourceRef);
-  const deletedSeen = new Set<string>();
-  for (const ref of refsToDelete) {
-    await deleteMediaRefWithSize(ref, deletedSeen);
+  const latest = loadChatMessages(message.sessionId).find(m => m.id === message.id);
+  if (!latest || latest.isRetracted || isAlbumFavoriteMessage(latest) || latest.mediaUrl !== message.mediaUrl || latest.mediaData?.imageGenerationMediaRef !== message.mediaData?.imageGenerationMediaRef) {
+    if (nextRef !== sourceRef) await deleteMediaRef(nextRef).catch(() => undefined);
+    return { changed: false, freedBytes: 0 };
   }
+  if (sourceRef && nextRef === sourceRef) refsToDelete.delete(sourceRef);
   const nextMediaData: ChatMessage["mediaData"] = {
-    ...message.mediaData,
+    ...latest.mediaData,
     fileType: "image",
     mediaCompressedAt: nowIso,
   };
@@ -281,11 +288,17 @@ async function compactChatImage(message: ChatMessage, nowIso: string): Promise<{
     mediaUrl: nextRef,
     mediaData: nextMediaData,
   };
+  if (albumAsset) {
+    saveAlbumDiscussion(getAlbumDiscussion(albumAsset));
+    relocatePhotoMedia(albumAsset.id, albumAsset.mediaRef, nextRef);
+  }
   const cached = updateChatMessage(message.id, {
     mediaUrl: nextMessage.mediaUrl,
     mediaData: nextMessage.mediaData,
   });
   await chatDb.messages.put(cached ?? nextMessage);
+  const deletedSeen = new Set<string>();
+  for (const ref of refsToDelete) await deleteMediaRefWithSize(ref, deletedSeen);
   const beforeBytes = oldBytes || sourceBlob.size;
   return { changed: compressed !== null || mediaUrl !== nextRef, freedBytes: Math.max(0, beforeBytes - nextBlob.size) };
 }
@@ -303,11 +316,14 @@ async function compactChatXiaohongshuShareImage(message: ChatMessage, nowIso: st
   return compressed;
 }
 
+function isAlbumFavoriteMessage(message: ChatMessage): boolean {
+  return isFavoriteChatPhoto(message.sessionId, message.id);
+}
+
 export async function cleanChatImage(message: ChatMessage, nowIso: string): Promise<number> {
+  if (isAlbumFavoriteMessage(message)) return 0;
   const seen = new Set<string>();
   let freedBytes = 0;
-  freedBytes += await deleteMediaRefWithSize(message.mediaUrl, seen);
-  freedBytes += await deleteMediaRefWithSize(message.mediaData?.imageGenerationMediaRef, seen);
   const nextMediaData: ChatMessage["mediaData"] = {
     ...message.mediaData,
     mediaCleanedAt: nowIso,
@@ -318,11 +334,22 @@ export async function cleanChatImage(message: ChatMessage, nowIso: string): Prom
     mediaUrl: undefined,
     mediaData: nextMediaData,
   };
-  const cached = updateChatMessage(message.id, {
+  const committed = await chatDb.transaction("rw", chatDb.messages, async () => {
+    const latest = await chatDb.messages.get(message.id);
+    if (!latest || latest.isRetracted || isAlbumFavoriteMessage(latest)
+      || latest.mediaUrl !== message.mediaUrl || latest.mediaData?.imageGenerationMediaRef !== message.mediaData?.imageGenerationMediaRef) return false;
+    nextMessage.mediaData = { ...latest.mediaData, mediaCleanedAt: nowIso };
+    delete nextMessage.mediaData.imageGenerationMediaRef;
+    await chatDb.messages.put({ ...latest, mediaUrl: undefined, mediaData: nextMessage.mediaData });
+    return true;
+  });
+  if (!committed) return 0;
+  updateChatMessage(message.id, {
     mediaUrl: undefined,
     mediaData: nextMessage.mediaData,
   });
-  await chatDb.messages.put(cached ?? nextMessage);
+  freedBytes += await deleteMediaRefWithSize(message.mediaUrl, seen);
+  freedBytes += await deleteMediaRefWithSize(message.mediaData?.imageGenerationMediaRef, seen);
   return freedBytes + estimateValueBytes(message.mediaUrl);
 }
 
@@ -338,26 +365,35 @@ export async function cleanChatXiaohongshuShareImage(message: ChatMessage, nowIs
 }
 
 async function runChatImageMaintenance(result: MediaMaintenanceResult, nowMs: number, nowIso: string): Promise<void> {
-  const messages = await chatDb.messages.toArray().catch(() => []);
-  for (const message of messages) {
-    const isRegularImage = isChatImageMessage(message);
-    const isXiaohongshuShareImage = isChatXiaohongshuShareImage(message);
-    if (!isRegularImage && !isXiaohongshuShareImage) continue;
-    if (isRegularImage && !message.mediaUrl && !message.mediaData?.imageGenerationMediaRef) continue;
-    if (isOlderThan(message.createdAt, CLEAN_AFTER_MS, nowMs)) {
-      result.freedBytes += isXiaohongshuShareImage
-        ? await cleanChatXiaohongshuShareImage(message, nowIso).catch(() => 0)
-        : await cleanChatImage(message, nowIso).catch(() => 0);
-      result.chatImagesCleaned += 1;
-      continue;
+  let albumByMessage: Map<string, PhotoAlbumAsset> | undefined;
+  let lastId: string | undefined;
+  while (true) {
+    const messages: ChatMessage[] = await (lastId === undefined ? chatDb.messages.orderBy(":id") : chatDb.messages.where(":id").above(lastId)).limit(32).toArray();
+    if (!messages.length) break;
+    lastId = messages[messages.length - 1].id;
+    for (const message of messages) {
+      const isRegularImage = isChatImageMessage(message);
+      const isXiaohongshuShareImage = isChatXiaohongshuShareImage(message);
+      if (!isRegularImage && !isXiaohongshuShareImage) continue;
+      if (isAlbumFavoriteMessage(message)) continue;
+      if (isRegularImage && !message.mediaUrl && !message.mediaData?.imageGenerationMediaRef) continue;
+      if (isOlderThan(message.createdAt, CLEAN_AFTER_MS, nowMs)) {
+        result.freedBytes += isXiaohongshuShareImage
+          ? await cleanChatXiaohongshuShareImage(message, nowIso).catch(() => 0)
+          : await cleanChatImage(message, nowIso).catch(() => 0);
+        result.chatImagesCleaned += 1;
+        continue;
+      }
+      if (!message.mediaData?.mediaCompressedAt && isOlderThan(message.createdAt, COMPRESS_AFTER_MS, nowMs)) {
+        if (isRegularImage && !albumByMessage) albumByMessage = new Map(collectPhotoAlbumAssets({ includeExcluded: true }).flatMap(asset => asset.source.kind === "chat" ? [[asset.source.messageId, asset] as const] : []));
+        const compacted = isXiaohongshuShareImage
+          ? await compactChatXiaohongshuShareImage(message, nowIso).catch(() => ({ changed: false, freedBytes: 0 }))
+          : await compactChatImage(message, nowIso, albumByMessage?.get(message.id)).catch(() => ({ changed: false, freedBytes: 0 }));
+        result.freedBytes += compacted.freedBytes;
+        if (compacted.changed) result.chatImagesCompressed += 1;
+      }
     }
-    if (!message.mediaData?.mediaCompressedAt && isOlderThan(message.createdAt, COMPRESS_AFTER_MS, nowMs)) {
-      const compacted = isXiaohongshuShareImage
-        ? await compactChatXiaohongshuShareImage(message, nowIso).catch(() => ({ changed: false, freedBytes: 0 }))
-        : await compactChatImage(message, nowIso).catch(() => ({ changed: false, freedBytes: 0 }));
-      result.freedBytes += compacted.freedBytes;
-      if (compacted.changed) result.chatImagesCompressed += 1;
-    }
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 }
 
@@ -449,32 +485,22 @@ async function runXiaohongshuImageMaintenance(result: MediaMaintenanceResult, no
   let changed = false;
 
   for (const note of state.notes) {
-    // 多图帖子把全部图片一起清理/压缩；旧单图帖子只有 imageAssetId
-    const assetIds = note.imageAssetIds?.length
-      ? note.imageAssetIds
-      : (note.imageAssetId ? [note.imageAssetId] : []);
-    if (assetIds.length === 0) continue;
+    if (!note.imageAssetId) continue;
     if (isOlderThan(note.createdAt, CLEAN_AFTER_MS, nowMs)) {
       state = updateXiaohongshuStateNotes(state, item =>
-        item.id === note.id
-          ? { ...item, imageAssetId: undefined, imageAssetIds: undefined, imageCleanedAt: nowIso, updatedAt: nowIso }
-          : item
+        item.id === note.id ? { ...item, imageAssetId: undefined, imageCleanedAt: nowIso, updatedAt: nowIso } : item
       );
       result.xiaohongshuImagesCleaned += 1;
       changed = true;
       continue;
     }
     if (note.imageCompressedAt || !isOlderThan(note.createdAt, COMPRESS_AFTER_MS, nowMs)) continue;
-    let anyCompressed = false;
-    for (const assetId of assetIds) {
-      const compressed = await compressThemeAssetById(assetId).catch(() => ({ changed: false, freedBytes: 0 }));
-      result.freedBytes += compressed.freedBytes;
-      if (compressed.changed) anyCompressed = true;
-    }
+    const compressed = await compressThemeAssetById(note.imageAssetId).catch(() => ({ changed: false, freedBytes: 0 }));
     state = updateXiaohongshuStateNotes(state, item =>
       item.id === note.id ? { ...item, imageCompressedAt: nowIso, updatedAt: nowIso } : item
     );
-    if (anyCompressed) result.xiaohongshuImagesCompressed += 1;
+    result.freedBytes += compressed.freedBytes;
+    if (compressed.changed) result.xiaohongshuImagesCompressed += 1;
     changed = true;
   }
 
@@ -512,7 +538,7 @@ async function openExistingDb(name: string): Promise<IDBDatabase | null> {
   if (!hasBrowserApi()) return null;
   return new Promise((resolve) => {
     let created = false;
-    const request = indexedDB.open(name);
+    const request = indexedDB.open(identityDatabaseName(name));
     request.onupgradeneeded = () => {
       created = true;
       request.transaction?.abort();
@@ -657,6 +683,22 @@ async function scanIndexedDbSourceWithScanner(dbName: string, scan: StorageStrin
  *  完全依赖这里覆盖到所有可能藏引用的地方——新增存储位置时必须登记进
  *  data-management/modules.ts（本函数按那份契约遍历）。 */
 export async function scanAllStorageStrings(scan: StorageStringScanner, excludeDbNames: string[] = []): Promise<void> {
+  // Theme assets are shared physically. Reference checks must include every identity,
+  // including worlds that are currently inactive, before deleting an asset.
+  if (typeof indexedDB !== "undefined" && indexedDB.databases) {
+    for (const database of await indexedDB.databases()) {
+      if (!database.name || database.name === "AiPhoneIdentityRecoveryDB" || excludeDbNames.includes(database.name)) continue;
+      const request = indexedDB.open(database.name);
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      try {
+        for (const name of Array.from(db.objectStoreNames)) {
+          const records = db.transaction(name).objectStore(name).getAll();
+          const values = await new Promise<unknown[]>((resolve, reject) => { records.onsuccess = () => resolve(records.result); records.onerror = () => reject(records.error); });
+          scanValueWithScanner(values, scan);
+        }
+      } finally { db.close(); }
+    }
+  }
   for (const { key, value } of kvEntries()) {
     scan(key);
     // JSON 值走结构化深扫（每个字符串叶子都会被扫到），不再对原始 JSON 串
@@ -669,11 +711,11 @@ export async function scanAllStorageStrings(scan: StorageStringScanner, excludeD
   }
 
   if (typeof localStorage !== "undefined") {
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
+    for (let index = 0; index < identityLocalStorage.length; index += 1) {
+      const key = identityLocalStorage.key(index);
       if (!key) continue;
       scan(key);
-      scan(localStorage.getItem(key) ?? "");
+      scan(identityLocalStorage.getItem(key) ?? "");
     }
   }
 

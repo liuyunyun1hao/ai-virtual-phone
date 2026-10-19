@@ -4,7 +4,7 @@
 import type { Book, BookChapter, ReadingAnnotation } from "./reading-types";
 import type { ChatSession } from "./chat-storage";
 import { loadChatMessages, pushChatMessage } from "./chat-storage";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { loadReadingInteractionConfig } from "./reading-storage";
 import {
     resolveBinding,

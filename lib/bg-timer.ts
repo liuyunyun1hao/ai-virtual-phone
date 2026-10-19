@@ -2,6 +2,7 @@
 // Background-safe timers using a Web Worker heartbeat.
 // Falls back to native setInterval/setTimeout when Worker is unavailable.
 
+import { hasActiveIdentity } from "./identity-runtime";
 let worker: Worker | null = null;
 const callbacks = new Map<string, () => void>();
 let idCounter = 0;
@@ -26,6 +27,8 @@ function ensureWorker(): Worker | null {
 
 /** setInterval that survives background tab throttling. Returns a stop function. */
 export function bgSetInterval(callback: () => void, ms: number): () => void {
+    const original = callback;
+    callback = () => { if (hasActiveIdentity()) original(); };
     const w = ensureWorker();
     const id = `bgi_${++idCounter}`;
 
@@ -45,6 +48,8 @@ export function bgSetInterval(callback: () => void, ms: number): () => void {
 
 /** setTimeout that survives background tab throttling. Returns a cancel function. */
 export function bgSetTimeout(callback: () => void, ms: number): () => void {
+    const original = callback;
+    callback = () => { if (hasActiveIdentity()) original(); };
     const w = ensureWorker();
     const id = `bgt_${++idCounter}`;
 

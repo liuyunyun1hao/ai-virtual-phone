@@ -4,7 +4,6 @@ import { getSchemes, saveScheme, deleteScheme, type CSSScheme } from "@/lib/css-
 import { Save, FolderOpen, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { CSSImportButton } from "@/components/ui/css-import-button";
-import { getBuiltinSchemes } from "@/lib/builtin-css-schemes";
 
 /** Semantic color tokens for the modal — pass CSS var() references so they follow the active theme */
 type ModalVars = {
@@ -47,8 +46,6 @@ const defaultBtn: React.CSSProperties = {
 export default function CSSSchemeBar({ target, onLoad, currentCSS, btnStyle, modalVars }: Props) {
   const v = { ...defaults, ...modalVars };
   const [schemes, setSchemes] = useState<CSSScheme[]>([]);
-  // 内置方案不进存储，直接按 target 取，始终最新
-  const builtins = getBuiltinSchemes(target);
   const [modal, setModal] = useState<"save" | "load" | null>(null);
   const [saveName, setSaveName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -167,35 +164,7 @@ export default function CSSSchemeBar({ target, onLoad, currentCSS, btnStyle, mod
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflowY: "auto" }}>
-                  {builtins.length > 0 && (
-                    <>
-                      <div style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: v.textDim, padding: "2px 2px 4px", letterSpacing: 0.5 }}>
-                        内置方案
-                      </div>
-                      {builtins.map(b => (
-                        <button
-                          key={b.id}
-                          type="button"
-                          onClick={() => handleLoad({ id: b.id, name: b.name, css: b.css, target: b.target, createdAt: "" })}
-                          style={{
-                            display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
-                            textAlign: "left", flexShrink: 0,
-                            padding: "9px 12px", borderRadius: 10, cursor: "pointer",
-                            border: `1px solid ${v.border}`, background: v.input,
-                          }}
-                        >
-                          <span style={{ fontSize: "calc(14px*var(--app-text-scale,1))", color: v.text }}>{b.name}</span>
-                          <span style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: v.textDim, lineHeight: 1.5 }}>{b.desc}</span>
-                        </button>
-                      ))}
-                      {schemes.length > 0 && (
-                        <div style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: v.textDim, padding: "8px 2px 4px", letterSpacing: 0.5 }}>
-                          我的方案
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {schemes.length === 0 && builtins.length === 0 ? (
+                  {schemes.length === 0 ? (
                     <div style={{ textAlign: "center", color: v.textDim, fontSize: "calc(13px*var(--app-text-scale,1))", padding: "20px 0" }}>
                       暂无保存的方案
                     </div>

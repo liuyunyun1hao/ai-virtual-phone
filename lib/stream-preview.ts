@@ -49,6 +49,9 @@ export function splitStreamPreviewSegments(text: string): string[] {
 export function cleanStreamText(raw: string, options?: { stripXmlTags?: readonly string[]; stripLiterals?: readonly string[] }): string {
     if (!raw) return "";
     let text = raw;
+    text = text
+        .replace(/\[(?:Echo|Love|Fireworks)\]/gi, "")
+        .replace(/\[(?:E|Ec|Ech|Echo|L|Lo|Lov|Love|F|Fi|Fir|Fire|Firew|Firewo|Firewor|Firework|Fireworks)$/gi, "");
     if (options?.stripXmlTags?.length) text = stripXmlTagBlocks(text, options.stripXmlTags);
     if (options?.stripLiterals?.length) text = stripLiteralTexts(text, options.stripLiterals);
     // 成对富媒体块整块剥掉
@@ -62,8 +65,12 @@ export function cleanStreamText(raw: string, options?: { stripXmlTags?: readonly
     const incompleteTool = text.match(TOOL_DIRECTIVE_START_RE);
     if (incompleteTool?.index !== undefined) text = text.slice(0, incompleteTool.index);
     // 富媒体完整标签显示为附件占位；尚未闭合时也隐藏协议正文。
+    text = text.replace(/\[Tapback\s*[:：][^\]]*(?:\]|$)/gi, "");
     text = text.replace(MEDIA_DIRECTIVE_RE, "📎 ");
     text = text.replace(INCOMPLETE_MEDIA_DIRECTIVE_RE, "📎 ");
+    // Tapback is a side effect on an existing message, never a preview bubble.
+    text = text.replace(/\[Tapback\s*[:：][^\]\r\n]*\]/gi, "");
+    text = text.replace(/\[Tapback\s*[:：][^\]\r\n]*$/gi, "");
     // 引用壳只隐藏标签，保留后面的实际回复。
     text = text.replace(/\[引用\s*[:：][^\]\r\n]*\]/g, "");
     text = text.replace(/\[引用\s*[:：][^\]\r\n]*$/g, "");

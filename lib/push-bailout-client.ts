@@ -1,3 +1,5 @@
+import { currentIdentityCloudTag } from "./identity-runtime";
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // 离线推送·兜底预约（客户端侧）：
 // 追问排期时把「组装好的完整请求快照」预约到服务端；本地正常触发就撤销，
 // App 被杀则由服务端 cron 到点接管生成并推送。组装用的就是前台同一条
@@ -27,7 +29,7 @@ import {
     loadIdleReconnectRules,
     type IdleReconnectRule,
 } from "./idle-reconnect-storage";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { RegexConfig } from "./settings-types";
 import type { LLMMessage } from "./llm-prompt-assembler";
 
@@ -48,7 +50,7 @@ const CALL_INVITE_INSTRUCTION = "（可选能力：如果你此刻更想直接�
 
 function readCallInviteArmedMap(): Record<string, number> {
     try {
-        const raw = localStorage.getItem(CALL_INVITE_STORE_KEY);
+        const raw = identityLocalStorage.getItem(CALL_INVITE_STORE_KEY);
         const parsed = raw ? JSON.parse(raw) : null;
         return parsed && typeof parsed === "object" ? parsed as Record<string, number> : {};
     } catch {
@@ -68,7 +70,7 @@ function maybeAppendCallInvite(llmMessages: LLMMessage[], characterId: string): 
         for (const key of Object.keys(map)) {
             if (Date.now() - map[key] > CALL_INVITE_WINDOW_MS * 2) delete map[key];
         }
-        localStorage.setItem(CALL_INVITE_STORE_KEY, JSON.stringify(map));
+        identityLocalStorage.setItem(CALL_INVITE_STORE_KEY, JSON.stringify(map));
         return true;
     } catch {
         return false;
@@ -157,6 +159,7 @@ export async function armReplyBailout(params: {
                     prevCount: 0,
                     regexes: params.regexes,
                     characterName: params.characterName,
+                    ...currentIdentityCloudTag(),
                     userName: params.userName ?? "用户",
                     appId: "chat",
                     appTags: ["chat", "text"],
@@ -310,6 +313,7 @@ export async function armFollowUpBailout(
                         prevCount,
                         regexes,
                         characterName: character.name,
+                        ...currentIdentityCloudTag(),
                         userName: userIdentity?.name ?? "用户",
                         appId: "chat",
                         appTags: ["chat", "text", "followup"],
@@ -457,6 +461,7 @@ export async function armIdleReconnectBailout(rule: IdleReconnectRule): Promise<
                 prevCount: 0,
                 regexes,
                 characterName: character.name,
+                ...currentIdentityCloudTag(),
                 userName: userIdentity?.name ?? "用户",
                 appId: "chat",
                 appTags: ["chat", "text", "idle_wake"],
@@ -518,6 +523,7 @@ export async function armTimedWakeBailout(schedule: TimedWakeSchedule): Promise<
                 prevCount: 0,
                 regexes,
                 characterName: character.name,
+                ...currentIdentityCloudTag(),
                 userName: userIdentity?.name ?? "用户",
                 appId: "chat",
                 appTags: ["chat", "text", wakeTag],
@@ -585,6 +591,7 @@ export async function armPeriodCareBailouts(): Promise<void> {
                         prevCount: 0,
                         regexes,
                         characterName,
+                        ...currentIdentityCloudTag(),
                         userName: userIdentity?.name ?? "用户",
                         appId: "chat",
                         appTags: ["chat", "text", "period_care"],

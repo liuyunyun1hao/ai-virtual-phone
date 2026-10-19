@@ -1,0 +1,13 @@
+const fs=require('node:fs'),ts=require('typescript'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('components/music/music-float.tsx','utf8');const ast=ts.createSourceFile('float.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);const decls={};function visit(n){if(ts.isVariableDeclaration(n)&&ts.isIdentifier(n.name))decls[n.name.text]=n;ts.forEachChild(n,visit)}visit(ast);
+let opens=0,expandedState=true;const scope={expanded:true,hidden:false,document:{},performance:{now:()=>100},DRAG_START_THRESHOLD:6,SWIPE_VELOCITY_RECENT_MS:180,SWIPE_INERTIA_MS:140,SWIPE_DISMISS_ARMING_X:88,SWIPE_DISMISS_SPEED:1.5,SWIPE_DISMISS_EDGE_X:4,pos:{x:100,y:100},dragRef:{current:{active:false}},floatRef:{current:{setPointerCapture(){},hasPointerCapture:()=>false,contains:t=>t.inside}},clampPos:(x,y)=>({x,y}),player:{openFullPlayer:()=>opens++},setExpanded:v=>{expandedState=typeof v==='function'?v(expandedState):v},setPos:()=>{},dismissFloat:()=>assert.fail('unexpected dismiss'),requestAnimationFrame:()=>{}};
+function handler(name,callback=true){let n=decls[name].initializer;if(callback)n=n.arguments[0];return vm.runInNewContext('('+ts.transpileModule(n.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText.replace(/;\s*$/,'')+')',scope)}
+const down=handler('handlePointerDown'),finish=handler('finishPointer'),outside=handler('onOutsidePointerDown',false);
+function event(kind){return {pointerId:1,clientX:100,clientY:100,target:{closest:s=>s==='button'?(kind==='button'?{}:null):s==='.music-float-cover-wrap'&&kind==='cover'?{}:null},preventDefault(){},stopPropagation(){}}}
+down(event('cover'));finish(event('cover'));assert.equal(opens,1);assert.equal(expandedState,false);
+scope.expanded=false;expandedState=false;down(event('cover'));finish(event('cover'));assert.equal(opens,1);assert.equal(expandedState,true);
+scope.expanded=true;down(event('cover'));scope.dragRef.current.moved=true;finish(event('cover'));assert.equal(opens,1,'drag must not open player');
+expandedState=true;outside({target:{inside:true}});assert.equal(expandedState,true);outside({target:{inside:false}});assert.equal(expandedState,false);
+expandedState=true;scope.dragRef.current.active=true;outside({target:{inside:false}});assert.equal(expandedState,true,'captured drag must not collapse');
+scope.dragRef.current.active=false;down(event('button'));assert.equal(scope.dragRef.current.active,false,'transport button not dragged');
+console.log('PASS: expanded cover opens, collapsed cover expands, outside collapses, internal click and drag preserved, transport buttons bypass drag.');

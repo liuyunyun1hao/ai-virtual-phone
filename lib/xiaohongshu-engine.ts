@@ -1,6 +1,6 @@
 import { getChatImageFromIndexedDB } from "./chat-asset-storage";
 import { ChatEngineError, previewMessagesForApi, sendLLMRequest } from "./chat-engine";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { Character } from "./character-types";
 import { assemblePromptPayload, type AssemblerInput, type LLMContentPart, type LLMMessage } from "./llm-prompt-assembler";
 import { DEFAULT_XIAOHONGSHU_BILINGUAL_PROMPT, resolveBilingualPrompt } from "./bilingual-prompt-defaults";

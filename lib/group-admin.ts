@@ -4,7 +4,7 @@
 // Member keys: "self" = the user, otherwise characterId.
 
 import { ChatSession, loadChatSessions, saveChatSessions } from "./chat-storage";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 
 export const GROUP_SELF_KEY = "self";
 

@@ -1,7 +1,18 @@
+export type CharacterAvatarHistoryEntry = {
+  id: string;
+  avatar: string | null;
+  label: string;
+  recordedAt: string;
+  lastSelectedAt: string;
+  selections: number;
+};
+
 export type Character = {
   id: string;
   name: string;
   avatar: string | null; // data URL 或外部 URL
+  /** Most recently used distinct avatars, oldest first; travels with local character data. */
+  avatarHistory?: CharacterAvatarHistoryEntry[];
   persona: string;       // 人设
   briefPersona?: string; // 简量版人设：注入到同世界有关系角色的「角色关系」marker，供对方了解 TA（防 OOC）
   briefPersonaUpdatedAt?: string; // 简介生成时间；早于 updatedAt 时编辑器提示「设定已更新，建议重新生成」
@@ -18,10 +29,6 @@ export type Character = {
   canvasRot?: number;
   canvasZIndex?: number;
   polaroidStyle?: number; // 用户选择的拍立得样式索引
-  polaroidSize?: "random" | "small" | "medium" | "large";
-  polaroidImageX?: number;
-  polaroidImageY?: number;
-  polaroidImageZoom?: number;
 };
 
 export type CanvasBgItem = {

@@ -12,7 +12,7 @@ import { getAllModels, type UserModel } from "./model-db";
 import SettingsModal, { useSceneSettings, isLightTheme } from "./SettingsModal";
 import SceneSaveLoadModal from "./SceneSaveLoadModal";
 import { hydrateKvDb } from "@/lib/kv-db";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 
 const SceneViewport = dynamic(() => import("./SceneViewport"), { ssr: false });

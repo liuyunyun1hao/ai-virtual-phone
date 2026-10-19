@@ -64,7 +64,7 @@ import { CheckPhoneWeiboPage } from "@/components/checkphone/checkphone-weibo-pa
 import { CheckPhoneXiaohongshuPage } from "@/components/checkphone/checkphone-xiaohongshu-page";
 import { CheckPhoneXPage } from "@/components/checkphone/checkphone-x-page";
 import { CheckPhoneYoutubePage } from "@/components/checkphone/checkphone-youtube-page";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 import {
   CHECKPHONE_APP_SPECS,
@@ -719,7 +719,6 @@ export function CheckPhoneApp({ onClose }: CheckPhoneAppProps) {
                             <div className="cp-w-music-disc"></div>
                             <div className="cp-w-tone-arm"></div>
                           </div>
-                          <span className="cp-widget-label">Widgets</span>
                         </div>
                         
                         {/* Core Vitals Widget - 2x2 */}

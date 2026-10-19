@@ -27,7 +27,8 @@ import {
 import { DATA_MODULES, getLightModuleIds } from "@/lib/data-management/modules";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 import { Select, Toggle } from "@/components/ui/form";
-import { ConfirmDialog } from "@/components/ui/modal";
+import { backupIdentityCards } from "@/lib/data-management/identity-backup";
+import { ConfirmDialog, ContentDialog } from "@/components/ui/modal";
 import { CloudUpload } from "lucide-react";
 import {
   DEFAULT_CLOUD_BACKUP_CONFIG,
@@ -289,6 +290,9 @@ export function DataManagement({ onNotice }: DataManagementProps) {
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [restartNotice, setRestartNotice] = useState<RestartNotice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [legacyTarget, setLegacyTarget] = useState<"new" | "current">("new");
+  const [overwriteShared, setOverwriteShared] = useState(false);
+  const [overwriteCloudPrivate, setOverwriteCloudPrivate] = useState(false);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [persistSupported, setPersistSupported] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -364,10 +368,8 @@ export function DataManagement({ onNotice }: DataManagementProps) {
 
   const confirmRestore = (pending: PendingCloudRestore) => runAction("恢复中", async () => {
     try {
-      // Cloud restore is a recovery path: "merge" keeps extra local records, but
-      // same-ID conflicts should still prefer the backup so partial/empty local
-      // shells cannot block a complete cloud backup from coming back.
-      const result = await restoreFromCloudManifest(cloudConfig, pending.item.name, { overwrite: true, onProgress: setCloudProgress });
+      // Cloud recovery defaults to preserving local conflicts, matching file import.
+      const result = await restoreFromCloudManifest(cloudConfig, pending.item.name, { overwrite: overwriteCloudPrivate, overwriteShared, legacyTarget, onProgress: setCloudProgress });
       setRestorePending(null);
       setShowRestore(false);
       if (result.errors.length > 0) {
@@ -453,8 +455,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
   };
 
   const executeExport = (moduleIds: DataModuleId[]) => runAction("导出中", async () => {
-    // 本地文件带上云服务连接信息：恢复后云备份直接是通的，不用再走一遍部署
-    const { blob, manifest, warnings } = await createBackupBlob(moduleIds, { excludeMedia: cloudConfig.excludeMedia, includeCloudCredentials: true });
+    const { blob, manifest, warnings } = await createBackupBlob(moduleIds, { excludeMedia: cloudConfig.excludeMedia, scope: cloudConfig.backupScope ?? "all" });
     const note = manifest.mediaExcluded ? "（不含图片/多媒体）" : "";
     // 导出侧不静默：数据库打不开 / 关键模块 0 记录必须当面告知，
     // 否则用户会带着一个"看起来成功、实际缺整库"的备份走（用户实报踩坑）
@@ -486,6 +487,8 @@ export function DataManagement({ onNotice }: DataManagementProps) {
     if (!file) return;
     await runAction("读取备份", async () => {
       const manifest = await readBackupManifest(file);
+      setLegacyTarget("new");
+      setOverwriteShared(false);
       setPendingImport({ file, manifest });
       setSelectedImportModules(manifest.modules.map((module) => module.id));
       return `已读取备份：${manifest.modules.map((module) => module.label).join("、")}`;
@@ -508,7 +511,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
 
   const executeImport = (moduleIds: DataModuleId[], overwrite = false) => runAction("导入中", async () => {
     if (!pendingImport) return "请先选择备份文件。";
-    const result: ImportResult = await importBackupBlob(pendingImport.file, moduleIds, { overwrite });
+    const result: ImportResult = await importBackupBlob(pendingImport.file, moduleIds, { overwrite, overwriteShared, legacyTarget });
     const importedCount = result.added + result.overwritten;
     if (importedCount === 0 && result.errors.length > 0) {
       throw new Error(`导入失败：${result.errors[0]}`);
@@ -518,7 +521,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
     const errorNote = result.errors.length > 0
       ? `，错误 ${result.errors.length} 个${result.errors[0] ? `\n首个错误：${result.errors[0]}` : ""}`
       : "";
-    setRestartNotice({ title: "导入完成，请彻底重启应用", summary: `${summary}${errorNote}。` });
+    setRestartNotice({ title: result.errors.length ? "部分导入完成，请重启后重试" : "导入完成，请彻底重启应用", summary: `${summary}${errorNote}。` });
   });
 
   const handlePersist = () => runAction("申请保护", async () => {
@@ -748,6 +751,21 @@ export function DataManagement({ onNotice }: DataManagementProps) {
         <div className="menu-group">
           <div className="menu-item data-readonly-item">
             <div className="menu-label-group">
+              <span className="menu-label">备份身份范围</span>
+              <span className="menu-desc">本地和自动云备份共用。公共档案保存一份，私人档案按 user 分开保存。</span>
+            </div>
+          </div>
+          <div className="data-chip-panel" role="group" aria-label="备份身份范围" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {([['all', '全部 user'], ['current', '当前 user']] as const).map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={(cloudConfig.backupScope ?? 'all') === value}
+                className="data-module-chip" data-selected={(cloudConfig.backupScope ?? 'all') === value ? '' : undefined}
+                style={iconStyle("var(--c-text-title)")}
+                disabled={Boolean(busy) || cloudBackingUp} onClick={() => updateCloud({ backupScope: value })}><span className="data-chip-label">{label}</span></button>
+            ))}
+            <p className="menu-desc" style={{ flexBasis: "100%" }}>{cloudConfig.backupScope === 'current' ? '包含公共档案与当前 user，其他 user 的聊天、相册等私人数据不导出。' : '包含公共档案与全部 user 的私人档案。多身份备份仅供此分档版 Float 恢复。'}</p>
+          </div>
+          <div className="menu-item data-readonly-item">
+            <div className="menu-label-group">
               <span className="menu-label">本地导出·不含图片/多媒体</span>
               <span className="menu-desc">仅【本地导出备份文件】生效：去掉壁纸、聊天图、朋友圈图等大文件（保留角色头像），文件更小、导出不卡。云端备份已支持分片上传，会完整备份图片，不受此开关影响。</span>
             </div>
@@ -863,7 +881,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
 
             {showRestore && (
               <div className="data-cloud-restore">
-                <div className="data-cloud-status">恢复会合并写入：同 ID 以云端为准，本机额外数据会保留。</div>
+                <div className="data-cloud-status">恢复会合并写入，默认保留本机冲突项；私人数据和公共档案可分别选择覆盖。本机额外数据会保留。</div>
                 {busy === "恢复中" ? (
                   <div className="data-cloud-progress" role="status">
                     <div className="data-cloud-progress-track">
@@ -892,7 +910,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
                         <button
                           type="button"
                           className="ui-btn ui-btn-outline py-1 px-3 ts-12"
-                          onClick={() => setRestorePending({ item })}
+                          onClick={() => { setOverwriteCloudPrivate(false); setOverwriteShared(false); setLegacyTarget("new"); setRestorePending({ item }); }}
                           disabled={Boolean(busy) || Boolean(item.error)}
                         >
                           恢复
@@ -951,7 +969,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
 
       {spaceClearPending && (
         <div className="modal-overlay" data-ui="modal" onClick={() => { if (!busy) setSpaceClearPending(null); }}>
-          <div className="modal-dialog data-import-modal" data-ui="modal-dialog" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-dialog data-import-modal" data-ui="modal-dialog" style={{ background: "color-mix(in srgb, var(--c-page-body-bg, #f2f2f7) 96%, transparent)", backdropFilter: "blur(24px)" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header" data-ui="modal-header">
               <h3 className="modal-title">清理{spaceClearPending.label}</h3>
             </div>
@@ -1044,6 +1062,18 @@ export function DataManagement({ onNotice }: DataManagementProps) {
                 {formatTime(pendingImport.manifest.createdAt)} · {formatBytes(pendingImport.manifest.totalBytes)}
                 {pendingImport.manifest.mediaExcluded ? " · 不含图片" : ""}
               </p>
+              <p className="menu-desc" style={{ marginBottom: 12 }}>
+                {pendingImport.manifest.identities ? pendingImport.manifest.identities.users.map(user => `${user.name}（${backupIdentityCards().some(local => local.id === user.id) ? '合并到同一身份' : '新增身份'}）`).join('、') : '旧版未分档备份：整份私人数据归入下方选定的一个 user。'}
+                公共档案默认保留本机同 ID 内容；其他 user 的私人档案保留。
+              </p>
+              {!pendingImport.manifest.identities && <div className="data-chip-panel" role="group" aria-label="旧存档导入位置" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {([['new', '新建 user（推荐）'], ['current', '当前 user']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={legacyTarget === value}
+                  className="data-module-chip" data-selected={legacyTarget === value ? '' : undefined} style={iconStyle("var(--c-text-title)" )} disabled={Boolean(busy)} onClick={() => setLegacyTarget(value)}>{label}</button>)}
+              </div>}
+              <div className="menu-item data-readonly-item">
+                <div className="menu-label-group"><span className="menu-label">覆盖公共档案的冲突项</span><span className="menu-desc">开启后，备份中的同 ID 角色、预设、美化等替换本机版本，影响所有 user。</span></div>
+                <Toggle checked={overwriteShared} onChange={setOverwriteShared} disabled={Boolean(busy)} ariaLabel="覆盖公共档案的冲突项" />
+              </div>
               <div className="data-inline-actions" style={{ marginBottom: 10 }}>
                 <span className="menu-desc" style={{ marginRight: "auto" }}>选择要导入的模块（{selectedImportModules.length} / {pendingImportItems.length}）</span>
                 <button type="button" className="ui-btn ui-btn-outline py-1 px-3 ts-12" onClick={() => setSelectedImportModules(pendingImportItems.map((item) => item.id))}>全选</button>
@@ -1126,11 +1156,11 @@ export function DataManagement({ onNotice }: DataManagementProps) {
           }
           message={
             confirmRequest.type === "export"
-              ? `将导出以下模块：${confirmRequest.labels}。是否继续？`
+              ? `将导出${cloudConfig.backupScope === "current" ? "当前 user" : "全部 user"}及公共档案。所选模块：${confirmRequest.labels}。${cloudConfig.excludeMedia ? "这份备份不含完整媒体。" : ""}是否继续？`
               : confirmRequest.type === "import"
                 ? confirmRequest.overwrite
-                  ? `覆盖导入会用备份中的数据覆盖已选模块：${confirmRequest.labels}。建议先导出当前数据。是否继续？`
-                  : `将合并导入以下模块：${confirmRequest.labels}。列表型数据会按 ID 去重合并，同 ID 项以备份为准。是否继续？`
+                  ? `将替换备份所含身份的同 ID 记录，保留其他记录。公共档案按上方开关处理。所选模块：${confirmRequest.labels}。是否继续？`
+                  : `将合并导入：${confirmRequest.labels}。同 ID 项保留本机版本；公共档案按上方开关处理。是否继续？`
                 : confirmRequest.type === "media-maintenance"
                   ? "将按规则压缩/清理过期动态媒体：4 天以上压缩图片，7 天以上清理聊天图片、朋友圈/小红书真实图和本地音乐，并清理确定无引用的旧主题素材。壁纸、图标、dock、字体等仍在引用的常驻资源不会删除。是否继续？"
                   : confirmRequest.type === "orphan-theme"
@@ -1154,15 +1184,24 @@ export function DataManagement({ onNotice }: DataManagementProps) {
       )}
 
       {restorePending && (
-        <ConfirmDialog
+        <ContentDialog
           title="确认从云端恢复？"
-          message={`将把 ${formatTime(restorePending.item.createdAt)} 这份云端备份合并到本机数据；本机没有的数据会新增，同 ID 数据以云端为准，本机额外数据会保留。建议先「立即备份」当前数据。是否继续？`}
-          icon={CloudDownload}
-          variant="action"
           confirmLabel="确认恢复"
           onConfirm={() => { const pending = restorePending; setRestorePending(null); if (pending) void confirmRestore(pending); }}
           onCancel={() => setRestorePending(null)}
-        />
+        >
+          <p className="menu-desc">{formatTime(restorePending.item.createdAt)}。{restorePending.item.identities ? "按身份 ID 分别恢复：" + restorePending.item.identities.users.map(user => user.name).join("、") : "旧版未分档备份默认新建一个 user 接收私人数据"}。默认保留本机同 ID 内容，其他记录不删除。</p>
+          {!restorePending.item.identities && <div className="menu-item data-readonly-item">
+            <span className="menu-label">改为导入当前 user</span><Toggle checked={legacyTarget === "current"} onChange={checked => setLegacyTarget(checked ? "current" : "new")} ariaLabel="旧云备份导入当前 user" />
+          </div>}
+          <div className="menu-item data-readonly-item">
+            <span className="menu-label">覆盖这些身份的同 ID 私人记录</span><Toggle checked={overwriteCloudPrivate} onChange={setOverwriteCloudPrivate} ariaLabel="覆盖云备份私人冲突项" />
+          </div>
+          <div className="menu-item data-readonly-item">
+            <div className="menu-label-group"><span className="menu-label">覆盖公共档案的冲突项</span><span className="menu-desc">影响所有 user 的角色、预设、美化等公共内容。</span></div>
+            <Toggle checked={overwriteShared} onChange={setOverwriteShared} ariaLabel="覆盖云备份公共冲突项" />
+          </div>
+        </ContentDialog>
       )}
 
       {/* 不给遮罩挂 onClick：这条必须让用户显式选一个，误触关掉就等于没提示过。 */}

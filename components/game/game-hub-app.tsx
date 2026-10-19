@@ -82,7 +82,7 @@ import type {
   GameTemplate,
   GameTemplateDraft,
 } from "@/lib/game-types";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 import type { LLMMessage } from "@/lib/llm-prompt-assembler";
 import { resolveUserIdentity } from "@/lib/settings-storage";

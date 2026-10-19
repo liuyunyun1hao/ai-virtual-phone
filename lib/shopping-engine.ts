@@ -4,6 +4,7 @@ import type { CheckPhoneShoppingProduct, CheckPhoneShoppingTone } from "./checkp
 import type { ApiConfig } from "./settings-types";
 import type { ShoppingCatalog, ShoppingCategory, ShoppingRefreshResult, ShoppingSearchResponse } from "./shopping-types";
 import type { LLMMessage } from "./llm-prompt-assembler";
+import { shoppingCurrencyInstruction } from "./currency-context";
 
 export const SHOPPING_RECOMMENDATION_CATEGORIES: Array<Pick<ShoppingCategory, "id" | "title" | "subtitle">> = [
   { id: "digital", title: "数码好物", subtitle: "小设备、桌面装备、智能配件" },
@@ -14,11 +15,26 @@ export const SHOPPING_RECOMMENDATION_CATEGORIES: Array<Pick<ShoppingCategory, "i
   { id: "hobby", title: "文具兴趣", subtitle: "纸品、手作、阅读、运动和旅行小物" },
 ];
 
+export const SHOPPING_LANGUAGE_AND_PRICING_INSTRUCTION = [
+  "【购物语言与选品定价】",
+  "界面与商品内容以简体中文为主：分类、商品名称的通用描述、店铺描述、说明、详情均使用中文；品牌名、官方系列名、型号等专有名称可以保留原文。计价币种改变不意味着改用英文，不意味着用户改变语言偏好。",
+  "先理解用户搜索词中的品类、档次、用途、预算及偏好再选品。显式预算、价格上下限及指定规格优先；不得用默认亲民推荐稀释奢侈、高端、顶级、收藏级等要求。未指定档次或预算的日常推荐仍以实用、亲民商品为主，搭配少量升级款。",
+  "价格要与品牌定位、具体系列、容量/数量、材质、规格和单品/套装一致；名称或详情明确规格与套装内容。不得让不同档次商品全部聚集在相近价位，也不能把人民币数值直接换上外币代码。不同币种按当地正常价格量级估计，不自行声称实时汇率或官方最新售价。",
+  "搜索要求奢侈或顶级时，在该品类和预算允许范围内覆盖高端单品、旗舰大规格、完整套装等有实质差异的档次；不要只推荐各品牌的入门或常规小容量款。若是奢侈化妆品，除合理的单品价格，还应包含有依据的旗舰护理、大容量或多件完整套组，以自然展示更高总价。",
+  "不设所有品类通用的价格上限，也不强制每件奢侈品超过某个金额。不能为拉开价格虚构限量身份、夸大功效、随意抬高普通产品售价，或把单品价格写成套装价格；无法确认真实型号时避免冒充官方精确报价。",
+  "输出前检查：搜索要求与预算是否满足，价位差异是否由明确规格和档次支撑，中文内容是否完整，价格币种是否正确。只输出请求规定的商品块，不额外输出检查过程。",
+].join("\n");
+
+export function shoppingGenerationInstruction(): string {
+  return `${shoppingCurrencyInstruction()}\n\n${SHOPPING_LANGUAGE_AND_PRICING_INSTRUCTION}`;
+}
+
 export const DEFAULT_SHOPPING_REFRESH_PROMPT = [
   "<shopping_refresh_instruction>",
   "你正在为一个独立购物 App 生成首页分类推荐商品流。",
   "",
   "要求：",
+  SHOPPING_LANGUAGE_AND_PRICING_INSTRUCTION,
   "- 只生成可以浏览和购买的首页推荐商品，不要生成最近浏览、收藏、购物车或订单。",
   "- 不要写角色、人设、记忆、剧情或旁白。",
   "- 必须按以下 6 个分类推荐，每个分类 5 到 7 条商品：",
@@ -60,6 +76,7 @@ export const DEFAULT_SHOPPING_SEARCH_PROMPT = [
   "你正在为一个独立购物 App 的搜索词“{{query}}”生成搜索结果商品流。",
   "",
   "要求：",
+  SHOPPING_LANGUAGE_AND_PRICING_INSTRUCTION,
   "- 只生成与搜索词“{{query}}”高度相关、可以浏览和购买的商品。",
   "- 不要生成首页分类推荐、最近浏览、收藏、购物车或订单。",
   "- 不要写角色、人设、记忆、剧情或旁白。",
@@ -300,7 +317,7 @@ export async function generateShoppingCatalog(refreshPrompt: string): Promise<Sh
     const rawOutput = await sendLLMRequest(
       apiConfig,
       null,
-      [{ role: "user", content: refreshPrompt || DEFAULT_SHOPPING_REFRESH_PROMPT }],
+      [{ role: "system", content: shoppingGenerationInstruction() }, { role: "user", content: refreshPrompt || DEFAULT_SHOPPING_REFRESH_PROMPT }],
       [],
       { characterName: "购物App" },
       { skipOutputRegex: true, appId: "shopping" },
@@ -340,7 +357,7 @@ export async function generateShoppingSearchResults(query: string, searchPrompt:
     const rawOutput = await sendLLMRequest(
       apiConfig,
       null,
-      [{ role: "user", content: applySearchPromptTemplate(searchPrompt, normalizedQuery) }],
+      [{ role: "system", content: shoppingGenerationInstruction() }, { role: "user", content: applySearchPromptTemplate(searchPrompt, normalizedQuery) }],
       [],
       { characterName: "购物App" },
       { skipOutputRegex: true, appId: "shopping_search" },
@@ -381,7 +398,7 @@ export async function previewShoppingPromptPayload(
   const prompt = mode === "search"
     ? applySearchPromptTemplate(params?.searchPrompt || DEFAULT_SHOPPING_SEARCH_PROMPT, params?.query?.trim() || "礼物")
     : (params?.refreshPrompt || DEFAULT_SHOPPING_REFRESH_PROMPT);
-  const messages = [{ role: "user" as const, content: prompt, _debugMeta: { marker: mode === "search" ? "shopping_search" : "shopping_catalog" } }];
+  const messages = [{ role: "system" as const, content: shoppingGenerationInstruction() }, { role: "user" as const, content: prompt, _debugMeta: { marker: mode === "search" ? "shopping_search" : "shopping_catalog" } }];
   return {
     messages: previewMessagesForApi(apiConfig, null, messages),
     characterName: mode === "search" ? "购物搜索" : "购物App",

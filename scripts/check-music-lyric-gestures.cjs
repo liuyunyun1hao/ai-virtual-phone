@@ -1,0 +1,21 @@
+const fs=require('node:fs'), assert=require('node:assert/strict'), ts=require('typescript'),vm=require('node:vm');
+const source=fs.readFileSync('components/music/music-player.tsx','utf8');
+const ast=ts.createSourceFile('player.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+let button;function visit(n){if(ts.isJsxOpeningElement(n)&&n.attributes.properties.some(a=>a.name?.text==='className'&&a.initializer?.text==='mp-lyric-seek'))button=n;ts.forEachChild(n,visit)}visit(ast);
+let timer,selected=0,covers=0; const press={current:{x:0,y:0,consumed:false}};
+let holding=null;
+const scope={lyricPress:press,i:0,setPressingLyric:value=>holding=value,line:{text:'line',time:44},selectLyric:()=>selected++,cancelLyricPress:()=>{timer=null;press.current.timer=undefined;holding=null},setTimeout:fn=>{timer=fn;return 1},Math};
+function handler(name){const prop=button.attributes.properties.find(a=>a.name?.text===name);return vm.runInNewContext('('+ts.transpileModule(prop.initializer.expression.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText.trim().replace(/;$/,'')+')',scope)}
+const down=handler('onPointerDown'),move=handler('onPointerMove'),up=handler('onPointerUp'),key=handler('onKeyDown');
+down({button:0,clientX:0,clientY:0});move({clientX:0,clientY:25});assert.equal(timer,null,'scroll cancels long press');assert.equal(selected,0);
+down({button:0,clientX:0,clientY:0});assert.equal(holding,0,'press feedback starts');up();assert.equal(timer,null,'tap cancels timer');assert.equal(holding,null,'release clears feedback');
+down({button:0,clientX:0,clientY:0});timer();assert.equal(selected,1);assert.equal(press.current.consumed,true);
+const click=source.match(/const handleLyricClick = useCallback\(\(_idx: number, e: React.MouseEvent\) => \{([\s\S]*?)\n    \}, \[\]\);/)[1];
+const clickFn=vm.runInNewContext('(e=>{'+ts.transpileModule(click,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText+'})',{lyricPress:press,setSelectedLyric:()=>{},setView:view=>{assert.equal(view,'cover');covers++},assert});
+clickFn({stopPropagation(){}});assert.equal(covers,0,'long press stays on lyrics');clickFn({stopPropagation(){}});assert.equal(covers,1,'tap returns to cover');
+down({button:0,clientX:0,clientY:0});move({clientX:0,clientY:25});clickFn({stopPropagation(){}});assert.equal(covers,1,'scroll does not return to cover');
+key({shiftKey:true,key:'F10',preventDefault(){},stopPropagation(){}});assert.equal(selected,2,'keyboard selects lyric');
+down({button:0,clientX:0,clientY:0});handler('onPointerCancel')();clickFn({stopPropagation(){}});assert.equal(covers,1,'cancel cannot become tap');assert.equal(holding,null);
+down({button:0,clientX:0,clientY:0});handler('onContextMenu')({preventDefault(){},stopPropagation(){}});clickFn({stopPropagation(){}});assert.equal(covers,1,'context menu cannot become tap');
+assert.ok(!source.includes('className="mp-lyric-select"'));
+console.log('PASS: production lyric handlers: tap returns to cover, hold stays on lyrics, scroll cancellation, keyboard selection; no per-line share icons.');

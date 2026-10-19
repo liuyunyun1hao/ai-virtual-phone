@@ -1,14 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
-import { ChatPluginBootstrap } from "@/components/chat-plugin-bootstrap";
-import { ChatReasoningVisibilityController } from "@/components/chat-reasoning-visibility-controller";
-import { CSSImportEnhancer } from "@/components/css-import-enhancer";
+import { IdentityRuntimeBootstrap } from "@/components/identity-runtime-bootstrap";
 import { PWAManifestInjector } from "@/components/pwa-manifest-injector";
 import { PWARegistrar } from "@/components/pwa-registrar";
 import "../styles/fonts.css";
 import "./globals.css";
-import "../styles/floating-controls.css";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -19,8 +16,8 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "float",
-  description: "float",
+  title: "float-Yyk",
+  description: "float-Yyk",
 };
 
 export default function RootLayout({
@@ -36,16 +33,14 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icon-192.png" />
         <link rel="icon" href="/icon-192.png" type="image/png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-title" content="float" />
+        <meta name="apple-mobile-web-app-title" content="float-Yyk" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="mobile-web-app-capable" content="yes" />
       </head>
       <body>
         <PWAManifestInjector />
         <PWARegistrar />
-        <CSSImportEnhancer />
-        <ChatPluginBootstrap />
-        <ChatReasoningVisibilityController />
+        <IdentityRuntimeBootstrap />
         {children}
       </body>
     </html>

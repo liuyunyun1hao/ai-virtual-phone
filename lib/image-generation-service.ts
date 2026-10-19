@@ -1,18 +1,8 @@
-import type { ImageGenerationSettings, NovelAiPreset } from "./settings-types";
-import { loadImageGenerationSettings, DEFAULT_NOVELAI_PRESET } from "./settings-storage";
-import JSZip from "jszip";
+import type { ImageGenerationSettings } from "./settings-types";
+import { loadImageGenerationSettings } from "./settings-storage";
 import { getChatImageFromIndexedDB } from "./chat-asset-storage";
 import { storeMediaBlob } from "./media-cache-storage";
 import { throwIfAborted } from "./abort-utils";
-import {
-  NOVELAI_COMMON_MODELS,
-  getNovelAiResolution,
-  normalizeNovelAiModel,
-  normalizeNovelAiNoiseSchedule,
-  normalizeNovelAiSampler,
-  normalizeNovelAiScale,
-  normalizeNovelAiSteps,
-} from "./novelai-image-config";
 
 export type ImageGenerationResult = {
   mediaRef: string;
@@ -324,27 +314,31 @@ async function generateImageDirect(params: {
   settings: ImageGenerationSettings;
   prompt: string;
   referenceImageDataUrl: string | null;
+  referenceImageDataUrls?: string[];
   signal?: AbortSignal;
   /** 走通用代理:请求发往代理地址,真实上游放进 x-upstream-base-url 头 */
   proxyBaseUrl?: string;
 }): Promise<ImageGenerationApiResponse> {
   const { settings, prompt, referenceImageDataUrl, signal, proxyBaseUrl } = params;
   throwIfAborted(signal);
-  const hasReference = Boolean(referenceImageDataUrl);
+  const references = params.referenceImageDataUrls?.length ? params.referenceImageDataUrls : referenceImageDataUrl ? [referenceImageDataUrl] : [];
+  const hasReference = references.length > 0;
   const url = buildImageUrl(proxyBaseUrl || settings.baseUrl, hasReference ? "edits" : "generations");
   const headers: Record<string, string> = { Authorization: `Bearer ${settings.apiKey}` };
   if (proxyBaseUrl) headers["x-upstream-base-url"] = normalizeBaseUrl(settings.baseUrl);
   let body: BodyInit;
 
   if (hasReference) {
-    const converted = dataUrlToBlob(referenceImageDataUrl || "");
-    if (!converted) throw new Error("参考图格式无效");
     const form = new FormData();
     form.set("model", settings.model);
     form.set("prompt", prompt);
     if (settings.size && settings.size !== "auto") form.set("size", settings.size);
     if (settings.quality && settings.quality !== "auto") form.set("quality", settings.quality);
-    form.append("image", converted.blob, `reference.${imageExtension(converted.mimeType)}`);
+    references.forEach((ref, index) => {
+      const converted = dataUrlToBlob(ref);
+      if (!converted) throw new Error("参考图格式无效");
+      form.append(references.length > 1 ? "image[]" : "image", converted.blob, `reference-${index + 1}.${imageExtension(converted.mimeType)}`);
+    });
     body = form;
   } else {
     headers["Content-Type"] = "application/json";
@@ -392,6 +386,7 @@ async function generateImageViaServerOrProxy(params: {
   settings: ImageGenerationSettings;
   prompt: string;
   referenceImageDataUrl: string | null;
+  referenceImageDataUrls?: string[];
   signal?: AbortSignal;
 }): Promise<ImageGenerationApiResponse> {
   if (IMAGE_GEN_PROXY_URL) {
@@ -425,6 +420,7 @@ async function generateImageViaServer(params: {
   settings: ImageGenerationSettings;
   prompt: string;
   referenceImageDataUrl: string | null;
+  referenceImageDataUrls?: string[];
   signal?: AbortSignal;
 }): Promise<ImageGenerationApiResponse> {
   const { settings, prompt, referenceImageDataUrl, signal } = params;
@@ -450,6 +446,7 @@ async function generateImageViaServer(params: {
         size: settings.size,
         quality: settings.quality,
         referenceImageDataUrl: referenceImageDataUrl || undefined,
+        referenceImageDataUrls: params.referenceImageDataUrls,
       }),
     });
     throwIfAborted(signal);
@@ -509,225 +506,13 @@ async function generateImageViaServer(params: {
   }
 }
 
-async function generateNovelAiDirect(params: {
-  apiKey: string;
-  preset: NovelAiPreset;
-  prompt: string;
-  signal?: AbortSignal;
-}): Promise<ImageGenerationApiResponse> {
-  const { apiKey, preset, prompt, signal } = params;
-  throwIfAborted(signal);
-
-  const { width, height } = getNovelAiResolution(preset.resolution);
-
-  const url = "https://image.novelai.net/ai/generate-image";
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-  };
-
-  const body = JSON.stringify({
-    input: prompt,
-    model: normalizeNovelAiModel(preset.model),
-    action: "generate",
-    parameters: {
-      width,
-      height,
-      scale: normalizeNovelAiScale(preset.scale),
-      sampler: normalizeNovelAiSampler(preset.sampler),
-      steps: normalizeNovelAiSteps(preset.steps),
-      n_samples: 1,
-      ucPreset: 0,
-      qualityToggle: preset.qualityToggle !== false,
-      sm: preset.smea === true,
-      sm_dyn: preset.smeaDyn === true,
-      dynamic_thresholding: false,
-      controlnet_strength: 1,
-      legacy: false,
-      add_original_image: false,
-      uncond_scale: 1,
-      cfg_rescale: 0,
-      noise_schedule: normalizeNovelAiNoiseSchedule(preset.noiseSchedule),
-      negative_prompt: preset.negativePrompt || "",
-    },
-  });
-
-  const controller = new AbortController();
-  const onOuterAbort = () => controller.abort();
-  if (signal) signal.addEventListener("abort", onOuterAbort, { once: true });
-  const totalTimer = setTimeout(() => controller.abort(), 180_000);
-
-  try {
-    const res = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new Error(`NovelAI 接口报错 ${res.status}: ${errText.slice(0, 200)}`);
-    }
-
-    const arrayBuf = await res.arrayBuffer();
-    const uint8 = new Uint8Array(arrayBuf);
-    const isZip = (uint8[0] === 0x50 && uint8[1] === 0x4b && uint8[2] === 0x03 && uint8[3] === 0x04)
-      || (res.headers.get("content-type") || "").toLowerCase().includes("zip");
-
-    if (isZip) {
-      const zip = await JSZip.loadAsync(arrayBuf);
-      const files = Object.keys(zip.files);
-      const pngFile = files.find(f => f.endsWith(".png")) || files[0];
-      if (!pngFile) throw new Error("NovelAI 返回的压缩包内未找到图片");
-      const b64 = await zip.files[pngFile].async("base64");
-      return { b64, mimeType: "image/png" };
-    }
-
-    let binary = "";
-    for (let i = 0; i < uint8.length; i++) {
-      binary += String.fromCharCode(uint8[i]);
-    }
-    return { b64: btoa(binary), mimeType: res.headers.get("content-type") || "image/png" };
-  } catch (error) {
-    if (controller.signal.aborted && !signal?.aborted) {
-      throw new Error("NovelAI 直连请求超时（180 秒未返回）");
-    }
-    if (error instanceof TypeError) {
-      throw new Error("NovelAI 浏览器直连失败：可能受到浏览器跨域 (CORS) 限制，请在生图设置中将请求方式切换为「服务端转发」。");
-    }
-    throw error;
-  } finally {
-    clearTimeout(totalTimer);
-    if (signal) signal.removeEventListener("abort", onOuterAbort);
-  }
-}
-
-async function generateNovelAiViaServer(params: {
-  apiKey: string;
-  preset: NovelAiPreset;
-  prompt: string;
-  signal?: AbortSignal;
-}): Promise<ImageGenerationApiResponse> {
-  const { apiKey, preset, prompt, signal } = params;
-  throwIfAborted(signal);
-
-  const controller = new AbortController();
-  const onOuterAbort = () => controller.abort();
-  if (signal) signal.addEventListener("abort", onOuterAbort, { once: true });
-  const totalTimer = setTimeout(() => controller.abort(), 180_000);
-
-  try {
-    const resolution = getNovelAiResolution(preset.resolution);
-    const res = await fetch("/api/image-generation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-stream-heartbeat": "1" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        provider: "novelai",
-        apiKey,
-        model: normalizeNovelAiModel(preset.model),
-        prompt,
-        size: resolution.value,
-        negativePrompt: preset.negativePrompt || "",
-        steps: normalizeNovelAiSteps(preset.steps),
-        scale: normalizeNovelAiScale(preset.scale),
-        sampler: normalizeNovelAiSampler(preset.sampler),
-        noiseSchedule: normalizeNovelAiNoiseSchedule(preset.noiseSchedule),
-        qualityToggle: preset.qualityToggle,
-        smea: preset.smea,
-        smeaDyn: preset.smeaDyn,
-      }),
-    });
-    throwIfAborted(signal);
-
-    type ServerImagePayload = { httpStatus?: number; b64?: string; mimeType?: string; revisedPrompt?: string; error?: string };
-    const contentType = (res.headers.get("content-type") || "").toLowerCase();
-    let data: ServerImagePayload;
-
-    if (contentType.includes("text/plain")) {
-      let text = "";
-      if (res.body) {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let idleTimer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          for (;;) {
-            idleTimer = setTimeout(() => controller.abort(), 25_000);
-            const { done, value } = await reader.read();
-            clearTimeout(idleTimer);
-            if (done) break;
-            text += decoder.decode(value, { stream: true });
-          }
-          text += decoder.decode();
-        } catch (err) {
-          clearTimeout(idleTimer);
-          if (controller.signal.aborted && !signal?.aborted) {
-            throw new Error("NovelAI 请求失败（服务器连接中断，超过 25 秒没有响应）");
-          }
-          throw err;
-        }
-      } else {
-        text = await res.text();
-      }
-      const marker = "@@RESULT@@";
-      const idx = text.lastIndexOf(marker);
-      if (idx < 0) throw new Error(`NovelAI 请求失败 ${res.status}（流式响应中断，未收到结果）`);
-      try {
-        data = JSON.parse(text.slice(idx + marker.length)) as ServerImagePayload;
-      } catch {
-        throw new Error("NovelAI 请求失败（流式结果解析出错）");
-      }
-      throwIfAborted(signal);
-      if (data.error || !data.b64) {
-        throw new Error(data.error || `NovelAI 请求失败 ${data.httpStatus ?? res.status}`);
-      }
-    } else {
-      data = await res.json().catch(() => ({})) as ServerImagePayload;
-      throwIfAborted(signal);
-      if (!res.ok || data.error || !data.b64) {
-        throw new Error(data.error || `NovelAI 请求失败 ${res.status}`);
-      }
-    }
-    return { b64: data.b64, mimeType: data.mimeType, revisedPrompt: data.revisedPrompt };
-  } finally {
-    clearTimeout(totalTimer);
-    if (signal) signal.removeEventListener("abort", onOuterAbort);
-  }
-}
-
-export async function fetchNovelAiModels(apiKey: string): Promise<string[]> {
-  const token = apiKey.trim();
-  if (!token) throw new Error("请先填写 NovelAI API Token。");
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const res = await fetch("https://image.novelai.net/user/data", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      if (res.status === 401 || res.status === 403) {
-        throw new Error("NovelAI API Token 无效或已失效，请重新获取后再试。");
-      }
-      throw new Error(`NovelAI Token 验证失败 ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ""}`);
-    }
-    return [...NOVELAI_COMMON_MODELS];
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("NovelAI Token 验证超时，请检查网络后重试。");
-    }
-    if (error instanceof TypeError) {
-      throw new Error("无法连接 NovelAI，请检查网络后重试。");
-    }
-    if (error instanceof Error) throw error;
-    throw new Error("NovelAI Token 验证失败，请检查网络后重试。");
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 export async function generateImageFromConfiguredApi(params: {
   description: string;
   characterId?: string;
   useReferenceImage?: boolean;
+  referenceImageDataUrl?: string;
+  referenceImageDataUrls?: string[];
+  persistResult?: boolean;
   settings?: ImageGenerationSettings;
   signal?: AbortSignal;
 }): Promise<ImageGenerationResult | null> {
@@ -735,70 +520,30 @@ export async function generateImageFromConfiguredApi(params: {
   if (!settings.enabled) return null;
 
   const description = params.description.trim();
-  if (!description) return null;
-
-  // NovelAI 模式
-  if (settings.provider === "novelai") {
-    const naiApiKey = settings.novelai?.apiKey?.trim();
-    if (!naiApiKey) return null;
-
-    const presets = settings.novelai?.presets && settings.novelai.presets.length > 0
-      ? settings.novelai.presets
-      : [DEFAULT_NOVELAI_PRESET];
-    const activePreset = presets.find(p => p.id === settings.novelai?.activePresetId) || presets[0];
-
-    const positiveParts: string[] = [];
-    if (activePreset.positivePrompt?.trim()) positiveParts.push(activePreset.positivePrompt.trim());
-    if (description) positiveParts.push(description);
-    const fullPrompt = positiveParts.join(", ");
-
-    const data = settings.requestMode === "direct"
-      ? await generateNovelAiDirect({ apiKey: naiApiKey, preset: activePreset, prompt: fullPrompt, signal: params.signal })
-      : await generateNovelAiViaServer({ apiKey: naiApiKey, preset: activePreset, prompt: fullPrompt, signal: params.signal });
-
-    throwIfAborted(params.signal);
-    const mimeType = data.mimeType || "image/png";
-    const blob = base64ToBlob(data.b64, mimeType);
-    throwIfAborted(params.signal);
-    const mediaRef = await storeMediaBlob(blob, mimeType, "image");
-    throwIfAborted(params.signal);
-    return {
-      mediaRef,
-      dataUrl: `data:${mimeType};base64,${data.b64}`,
-      blob,
-      mimeType,
-      prompt: fullPrompt,
-      usedReferenceImage: false,
-      revisedPrompt: data.revisedPrompt,
-    };
-  }
-
-  // OpenAI 兼容模式：使用当前激活预设（旧配置由存储层迁移后仍保持兼容）
-  const openaiPreset = settings.openaiPresets?.find(preset => preset.id === settings.activeOpenAiPresetId)
-    || settings.openaiPresets?.[0];
-  const openaiSettings = openaiPreset ? { ...settings, ...openaiPreset } : settings;
-  if (!openaiSettings.apiKey.trim() || !openaiSettings.baseUrl.trim() || !openaiSettings.model.trim()) return null;
+  if (!description || !settings.apiKey.trim() || !settings.baseUrl.trim() || !settings.model.trim()) return null;
 
   const reference = params.characterId ? settings.characterReferences[params.characterId] : undefined;
-  const rawReferenceImageDataUrl = params.useReferenceImage && reference?.assetId
+  const rawReferenceImageDataUrl = params.referenceImageDataUrl || (params.useReferenceImage && reference?.assetId
     ? await getChatImageFromIndexedDB(reference.assetId)
-    : null;
+    : null);
   throwIfAborted(params.signal);
   const referenceImageDataUrl = rawReferenceImageDataUrl
     ? await normalizeReferenceImageForEdit(rawReferenceImageDataUrl)
     : null;
+  const referenceImageDataUrls = params.referenceImageDataUrls?.length
+    ? await Promise.all(params.referenceImageDataUrls.map(normalizeReferenceImageForEdit)) : undefined;
   throwIfAborted(params.signal);
-  const prompt = mergePrompt(description, openaiSettings.extraPrompt);
+  const prompt = mergePrompt(description, settings.extraPrompt);
 
-  const data = openaiSettings.requestMode === "direct"
-    ? await generateImageDirect({ settings: openaiSettings, prompt, referenceImageDataUrl, signal: params.signal })
-    : await generateImageViaServerOrProxy({ settings: openaiSettings, prompt, referenceImageDataUrl, signal: params.signal });
+  const data = settings.requestMode === "direct"
+    ? await generateImageDirect({ settings, prompt, referenceImageDataUrl, referenceImageDataUrls, signal: params.signal })
+    : await generateImageViaServerOrProxy({ settings, prompt, referenceImageDataUrl, referenceImageDataUrls, signal: params.signal });
 
   throwIfAborted(params.signal);
   const mimeType = data.mimeType || "image/png";
   const blob = base64ToBlob(data.b64, mimeType);
   throwIfAborted(params.signal);
-  const mediaRef = await storeMediaBlob(blob, mimeType, "image");
+  const mediaRef = params.persistResult === false ? "" : await storeMediaBlob(blob, mimeType, "image");
   throwIfAborted(params.signal);
   return {
     mediaRef,
@@ -806,7 +551,7 @@ export async function generateImageFromConfiguredApi(params: {
     blob,
     mimeType,
     prompt,
-    usedReferenceImage: Boolean(referenceImageDataUrl),
+    usedReferenceImage: Boolean(referenceImageDataUrl || referenceImageDataUrls?.length),
     revisedPrompt: data.revisedPrompt,
   };
 }
@@ -817,11 +562,4 @@ export function generatedImageFilename(description: string, mimeType = "image/pn
     .replace(/[^\u4e00-\u9fa5A-Za-z0-9_-]+/g, "")
     .slice(0, 28) || "generated-image";
   return `${safe}.${imageExtension(mimeType)}`;
-}
-
-export function hasCharacterReferenceImage(characterId?: string): boolean {
-  if (!characterId) return false;
-  const settings = loadImageGenerationSettings();
-  const ref = settings.characterReferences?.[characterId];
-  return Boolean(ref?.assetId);
 }

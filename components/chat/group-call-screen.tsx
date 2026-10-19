@@ -1,8 +1,8 @@
 "use client";
+import { voiceDisplayText, voiceSpeechText } from "@/lib/voice-expression";
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ChatSession, ChatMessage, loadChatMessages, pushChatMessage, getLatestCharacterStateValues } from "@/lib/chat-storage";
-import { getStatusRegionConfig, isCustomStatusRegionActive } from "@/lib/chat-status-region";
 import { generateGroupChatCompletion } from "@/lib/group-chat-engine";
 import { parseAIResponse } from "@/lib/rich-message-parser";
 import { resolveUserIdentity } from "@/lib/settings-storage";
@@ -242,8 +242,9 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
                     getLatestCharacterStateValues(r.characterId),
                 );
                 const textParts = parts.filter(p => !p.mediaType && p.content.trim());
-                const displayText = textParts.map(p => p.content).join("\n");
-                const speechText = stripBilingualForSpeech(displayText);
+                const spokenText = textParts.map(p => p.content).join("\n");
+                const displayText = voiceDisplayText(spokenText);
+                const speechText = voiceSpeechText(stripBilingualForSpeech(spokenText));
 
                 if (!displayText && !(statusPanel || innerMonologue)) continue;
 
@@ -251,10 +252,6 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
                     sessionId: session.id, role: "assistant",
                     content: displayText,
                     statusPanel: statusPanel || undefined,
-                    // 自定义状态栏渲染戳：不盖的话 custom 模式下 [状态栏] 原文按 markdown 渲染
-                    statusRegionMode: statusPanel && isCustomStatusRegionActive(getStatusRegionConfig(session.id))
-                        ? ("custom" as const)
-                        : undefined,
                     innerMonologue: innerMonologue || undefined,
                     stateValues: stateValues.length > 0 ? stateValues : undefined,
                     freshStateValues,

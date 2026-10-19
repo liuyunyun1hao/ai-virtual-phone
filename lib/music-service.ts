@@ -1,3 +1,4 @@
+import { matchesSharedSong } from "./music-song-match";
 // lib/music-service.ts — Unified music search service (local + Netease Cloud Music API)
 
 import { loadAllTracks, type MusicTrack } from "./music-storage";
@@ -843,10 +844,13 @@ export async function findBestMatch(title: string, artist?: string): Promise<Uni
 
 /**
  * Find best PLAYABLE match — tries each result until one has a valid play URL.
- * Falls back to findBestMatch if all fail.
+ * Restrict candidates to the requested title and artist when supplied.
  */
-export async function findPlayableMatch(title: string, _artist?: string): Promise<{ result: UnifiedSearchResult; playUrl?: string } | null> {
-    const results = await unifiedSearch(title);
+export async function findPlayableMatch(title: string, artist?: string): Promise<{ result: UnifiedSearchResult; playUrl?: string } | null> {
+    let results = (await unifiedSearch(title)).filter(item => matchesSharedSong(item, title, artist));
+    if (!results.length && artist?.trim()) {
+        results = (await unifiedSearch(title + " " + artist)).filter(item => matchesSharedSong(item, title, artist));
+    }
     if (results.length === 0) return null;
 
     // Local tracks are always playable

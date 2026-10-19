@@ -47,7 +47,7 @@ function splitSegmentedBilingualLine(line: string): { original: string; translat
     };
 }
 
-export function splitBilingualText(text: string): { original: string; translated: string } | null {
+export function splitBilingualText(text: string, options?: { allowUnchangedTranslation?: boolean }): { original: string; translated: string } | null {
     const trimmed = normalizeBilingualTextInput(text).trim();
     if (!trimmed || trimmed.includes("```") || /<script\b|<style\b/i.test(trimmed)) return null;
     const firstPipe = trimmed.indexOf("|");
@@ -56,7 +56,10 @@ export function splitBilingualText(text: string): { original: string; translated
         const original = trimmed.slice(0, firstPipe).trim();
         const translated = trimmed.slice(firstPipe + 1).trim();
         if (!original || !translated) return null;
-        if (!containsChinese(translated)) return null;
+        // Only chat text opts in: quoted names/emoji may legitimately stay unchanged.
+        const nameKey = (value: string) => value.replace(/[^\p{L}\p{N}\p{S}]/gu, "").toLowerCase();
+        const unchanged = options?.allowUnchangedTranslation && nameKey(original) !== "" && nameKey(original) === nameKey(translated);
+        if (!containsChinese(translated) && !unchanged) return null;
         return { original, translated };
     }
     if (trimmed.includes("\n")) {

@@ -1,17 +1,12 @@
 import type {
-    GenerationParameterKey,
     PresetConfig,
     WorldBookConfig,
     WorldBookEntry,
     RegexConfig,
     RegexRule,
     ApiConfig,
-    ApiGroup,
-    ApiAccount,
-    ApiLedgerEntry,
     VoiceApiConfig,
     ImageGenerationSettings,
-    OpenAiImagePreset,
     BindingConfig,
     BindingSlot,
     CharacterBinding,
@@ -20,20 +15,6 @@ import type {
 } from "./settings-types";
 import type { UserIdentity } from "@/components/settings/user-identity";
 import { createBuiltinPreset, BUILTIN_PRESET_VERSION } from "./builtin-preset";
-import {
-    NOVELAI_DEFAULT_MODEL,
-    NOVELAI_DEFAULT_NOISE_SCHEDULE,
-    NOVELAI_DEFAULT_RESOLUTION,
-    NOVELAI_DEFAULT_SAMPLER,
-    NOVELAI_DEFAULT_SCALE,
-    NOVELAI_DEFAULT_STEPS,
-    normalizeNovelAiModel,
-    normalizeNovelAiNoiseSchedule,
-    normalizeNovelAiResolution,
-    normalizeNovelAiSampler,
-    normalizeNovelAiScale,
-    normalizeNovelAiSteps,
-} from "./novelai-image-config";
 import { areTagsEqual, normalizePromptScopeTags, normalizeTags } from "./content-tag-utils";
 import {
     readPresetsCache, writePresetsCache,
@@ -43,8 +24,8 @@ import {
     hydrateSettingsDb,
 } from "./settings-db";
 import { kvGet, kvSet, kvRemove, registerKvMigration } from "./kv-db";
-import { isGenerationParameterKey } from "./generation-parameters";
-import { createId as generateId } from "./id-utils";
+import { getCurrentIdentityId, isIdentityInitialized, IDENTITY_BASE_BINDING_KEY } from "./identity-runtime";
+import { updateIdentityDirectory } from "./identity-lifecycle";
 
 // --- Unsupported import format detection ---
 export const UNSUPPORTED_IMPORT_FORMAT = "UNSUPPORTED_IMPORT_FORMAT";
@@ -83,9 +64,6 @@ function isUnsupportedWorldBookFormat(obj: Record<string, unknown>): boolean {
 
 // --- Keys ---
 const API_CONFIGS_KEY = "ai_phone_api_configs_v1";
-const API_GROUPS_KEY = "ai_phone_api_groups_v1";
-const API_ACCOUNTS_KEY = "ai_phone_api_accounts_v1";
-const API_LEDGER_KEY = "ai_phone_api_ledger_v1";
 const VOICE_CONFIGS_KEY = "ai_phone_voice_configs_v1";
 const IMAGE_GENERATION_SETTINGS_KEY = "ai_phone_image_generation_settings_v1";
 const BINDINGS_KEY = "ai_phone_bindings_v1";
@@ -96,9 +74,6 @@ const USER_IDENTITIES_KEY = "ai_phone_user_identities_v1";
 // Legacy key for migration
 const LEGACY_OVERRIDES_KEY = "ai_phone_char_settings_v1";
 registerKvMigration(API_CONFIGS_KEY);
-registerKvMigration(API_GROUPS_KEY);
-registerKvMigration(API_ACCOUNTS_KEY);
-registerKvMigration(API_LEDGER_KEY);
 registerKvMigration(VOICE_CONFIGS_KEY);
 registerKvMigration(IMAGE_GENERATION_SETTINGS_KEY);
 registerKvMigration(BINDINGS_KEY);
@@ -108,6 +83,9 @@ registerKvMigration(USER_IDENTITIES_KEY);
 registerKvMigration(LEGACY_OVERRIDES_KEY);
 
 // --- Helpers ---
+function generateId(prefix: string) {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
 
 function getNow() {
     return Date.now();
@@ -333,11 +311,6 @@ export function parsePresetFromJson(text: string, fallbackName: string = "导入
         if (typeof obj.repetition_penalty === "number") preset.repetition_penalty = obj.repetition_penalty;
         if (typeof obj.openai_max_tokens === "number") preset.openai_max_tokens = obj.openai_max_tokens;
         if (typeof obj.openai_max_context === "number") preset.openai_max_context = obj.openai_max_context;
-        if (Array.isArray(obj.enabled_generation_parameters)) {
-            preset.enabled_generation_parameters = Array.from(
-                new Set<GenerationParameterKey>(obj.enabled_generation_parameters.filter(isGenerationParameterKey)),
-            );
-        }
         // New preset globals
         if (typeof obj.top_a === "number") preset.top_a = obj.top_a;
         if (typeof obj.min_p === "number") preset.min_p = obj.min_p;
@@ -634,9 +607,6 @@ function normalizeApiConfig(config: LegacyApiConfig): ApiConfig {
         preventEmptyGenerateRambling: typeof config.preventEmptyGenerateRambling === "boolean"
             ? config.preventEmptyGenerateRambling
             : true,
-        enableStreaming: typeof config.enableStreaming === "boolean"
-            ? config.enableStreaming
-            : true,
     };
 }
 
@@ -655,104 +625,6 @@ export function loadApiConfigs(): ApiConfig[] {
 export function saveApiConfigs(configs: ApiConfig[]): void {
     if (typeof window === "undefined") return;
     kvSet(API_CONFIGS_KEY, JSON.stringify(configs.map(normalizeApiConfig)));
-}
-
-// --- API Groups（文件夹） ──────────────────────────────────────
-
-function normalizeApiGroup(group: ApiGroup): ApiGroup {
-    return {
-        id: typeof group?.id === "string" ? group.id : generateId("apigroup"),
-        name: typeof group?.name === "string" && group.name.trim() ? group.name : "新文件夹",
-        collapsed: group?.collapsed === true,
-        createdAt: typeof group?.createdAt === "number" ? group.createdAt : undefined,
-    };
-}
-
-export function loadApiGroups(): ApiGroup[] {
-    if (typeof window === "undefined") return [];
-    try {
-        const raw = kvGet(API_GROUPS_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw) as ApiGroup[];
-        return Array.isArray(parsed) ? parsed.map(normalizeApiGroup) : [];
-    } catch {
-        return [];
-    }
-}
-
-export function saveApiGroups(groups: ApiGroup[]): void {
-    if (typeof window === "undefined") return;
-    kvSet(API_GROUPS_KEY, JSON.stringify(groups.map(normalizeApiGroup)));
-}
-
-// --- API Accounts（一个文件夹一本账） ────────────────────────────
-
-function normalizeApiAccount(raw: Partial<ApiAccount> | undefined): ApiAccount {
-    const balance = Number(raw?.balance);
-    const lowThreshold = Number(raw?.lowThreshold);
-    return {
-        id: typeof raw?.id === "string" ? raw.id : "",
-        balance: Number.isFinite(balance) ? balance : 0,
-        lowThreshold: Number.isFinite(lowThreshold) && lowThreshold > 0 ? lowThreshold : undefined,
-        note: typeof raw?.note === "string" && raw.note.trim() ? raw.note : undefined,
-        autoCharge: raw?.autoCharge === false ? false : true,
-        billingMode: raw?.billingMode === "per_task" ? "per_task" : "per_call",
-        updatedAt: typeof raw?.updatedAt === "number" ? raw.updatedAt : undefined,
-    };
-}
-
-export function loadApiAccounts(): ApiAccount[] {
-    if (typeof window === "undefined") return [];
-    try {
-        const raw = kvGet(API_ACCOUNTS_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw) as Partial<ApiAccount>[];
-        return Array.isArray(parsed) ? parsed.map(normalizeApiAccount) : [];
-    } catch {
-        return [];
-    }
-}
-
-export function saveApiAccounts(accounts: ApiAccount[]): void {
-    if (typeof window === "undefined") return;
-    kvSet(API_ACCOUNTS_KEY, JSON.stringify(accounts.map(normalizeApiAccount)));
-}
-
-// --- API Ledger（账目流水，新→旧） ──────────────────────────────
-
-function normalizeApiLedgerEntry(raw: Partial<ApiLedgerEntry> | undefined): ApiLedgerEntry {
-    const amount = Number(raw?.amount);
-    const balanceAfter = Number(raw?.balanceAfter);
-    const createdAt = Number(raw?.createdAt);
-    const kind = raw?.kind === "topup" || raw?.kind === "set" ? raw.kind : "spend";
-    return {
-        id: typeof raw?.id === "string" && raw.id ? raw.id : generateId("apiledger"),
-        accountId: typeof raw?.accountId === "string" ? raw.accountId : "",
-        configId: typeof raw?.configId === "string" && raw.configId ? raw.configId : undefined,
-        configName: typeof raw?.configName === "string" && raw.configName ? raw.configName : undefined,
-        kind,
-        amount: Number.isFinite(amount) ? amount : 0,
-        balanceAfter: Number.isFinite(balanceAfter) ? balanceAfter : 0,
-        note: typeof raw?.note === "string" && raw.note.trim() ? raw.note : undefined,
-        createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
-    };
-}
-
-export function loadApiLedger(): ApiLedgerEntry[] {
-    if (typeof window === "undefined") return [];
-    try {
-        const raw = kvGet(API_LEDGER_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw) as Partial<ApiLedgerEntry>[];
-        return Array.isArray(parsed) ? parsed.map(normalizeApiLedgerEntry) : [];
-    } catch {
-        return [];
-    }
-}
-
-export function saveApiLedger(entries: ApiLedgerEntry[]): void {
-    if (typeof window === "undefined") return;
-    kvSet(API_LEDGER_KEY, JSON.stringify(entries.map(normalizeApiLedgerEntry)));
 }
 
 // --- Voice Configs ──────────────────────────────────────────
@@ -775,25 +647,8 @@ export function saveVoiceConfigs(configs: VoiceApiConfig[]): void {
 
 // --- Image Generation Settings ──────────────────────────────────────────
 
-export const DEFAULT_NOVELAI_PRESET: import("./settings-types").NovelAiPreset = {
-    id: "preset_default_anime",
-    name: "默认动漫预设",
-    model: NOVELAI_DEFAULT_MODEL,
-    resolution: NOVELAI_DEFAULT_RESOLUTION,
-    steps: NOVELAI_DEFAULT_STEPS,
-    scale: NOVELAI_DEFAULT_SCALE,
-    sampler: NOVELAI_DEFAULT_SAMPLER,
-    noiseSchedule: NOVELAI_DEFAULT_NOISE_SCHEDULE,
-    positivePrompt: "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
-    negativePrompt: "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, artist name",
-    qualityToggle: true,
-    smea: false,
-    smeaDyn: false,
-};
-
 export const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
     enabled: false,
-    provider: "openai",
     requestMode: "direct",
     apiKey: "",
     baseUrl: "https://api.openai.com/v1",
@@ -801,11 +656,6 @@ export const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
     size: "1024x1024",
     quality: "auto",
     extraPrompt: "",
-    novelai: {
-        apiKey: "",
-        activePresetId: DEFAULT_NOVELAI_PRESET.id,
-        presets: [DEFAULT_NOVELAI_PRESET],
-    },
     characterReferences: {},
     imageHosting: {
         provider: "none",
@@ -817,111 +667,32 @@ export const DEFAULT_IMAGE_GENERATION_SETTINGS: ImageGenerationSettings = {
     },
 };
 
-function normalizeNovelAiPreset(preset: Partial<import("./settings-types").NovelAiPreset> | null | undefined, index: number): import("./settings-types").NovelAiPreset {
-    return {
-        id: typeof preset?.id === "string" && preset.id.trim() ? preset.id.trim() : `preset_nai_${Date.now()}_${index}`,
-        name: typeof preset?.name === "string" && preset.name.trim() ? preset.name.trim() : `预设 ${index + 1}`,
-        model: normalizeNovelAiModel(preset?.model),
-        resolution: normalizeNovelAiResolution(preset?.resolution),
-        steps: normalizeNovelAiSteps(preset?.steps),
-        scale: normalizeNovelAiScale(preset?.scale),
-        sampler: normalizeNovelAiSampler(preset?.sampler),
-        noiseSchedule: normalizeNovelAiNoiseSchedule(preset?.noiseSchedule),
-        positivePrompt: typeof preset?.positivePrompt === "string" ? preset.positivePrompt : DEFAULT_NOVELAI_PRESET.positivePrompt,
-        negativePrompt: typeof preset?.negativePrompt === "string" ? preset.negativePrompt : DEFAULT_NOVELAI_PRESET.negativePrompt,
-        qualityToggle: preset?.qualityToggle !== false,
-        smea: preset?.smea === true,
-        smeaDyn: preset?.smeaDyn === true,
-    };
-}
-
-function normalizeOpenAiPreset(preset: Partial<OpenAiImagePreset> | null | undefined, index: number): OpenAiImagePreset {
-    return {
-        id: typeof preset?.id === "string" && preset.id.trim() ? preset.id.trim() : `preset_openai_${Date.now()}_${index}`,
-        name: typeof preset?.name === "string" && preset.name.trim() ? preset.name.trim() : "默认方案",
-        requestMode: preset?.requestMode === "server" || preset?.requestMode === "direct" ? preset.requestMode : DEFAULT_IMAGE_GENERATION_SETTINGS.requestMode,
-        apiKey: typeof preset?.apiKey === "string" ? preset.apiKey : "",
-        baseUrl: typeof preset?.baseUrl === "string" ? preset.baseUrl : DEFAULT_IMAGE_GENERATION_SETTINGS.baseUrl,
-        model: typeof preset?.model === "string" ? preset.model : DEFAULT_IMAGE_GENERATION_SETTINGS.model,
-        size: typeof preset?.size === "string" ? preset.size : DEFAULT_IMAGE_GENERATION_SETTINGS.size,
-        quality: typeof preset?.quality === "string" ? preset.quality : DEFAULT_IMAGE_GENERATION_SETTINGS.quality,
-        extraPrompt: typeof preset?.extraPrompt === "string" ? preset.extraPrompt : "",
-    };
-}
-
 function normalizeImageGenerationSettings(settings: Partial<ImageGenerationSettings> | null | undefined): ImageGenerationSettings {
     const refs = settings?.characterReferences && typeof settings.characterReferences === "object"
         ? settings.characterReferences
         : {};
-    const provider = settings?.provider === "novelai" ? "novelai" : "openai";
     const requestMode = settings?.requestMode === "server" || settings?.requestMode === "direct"
         ? settings.requestMode
         : DEFAULT_IMAGE_GENERATION_SETTINGS.requestMode;
     const hosting: Partial<ImageGenerationSettings["imageHosting"]> = settings?.imageHosting && typeof settings.imageHosting === "object"
         ? settings.imageHosting
         : {};
-    const hostingProvider = hosting.provider === "imgbb" ? "imgbb" : "none";
+    const provider = hosting.provider === "imgbb" ? "imgbb" : "none";
     const defaultExpirationSeconds = typeof hosting.defaultExpirationSeconds === "number"
         ? Math.max(0, Math.min(15552000, Math.floor(hosting.defaultExpirationSeconds)))
         : DEFAULT_IMAGE_GENERATION_SETTINGS.imageHosting.defaultExpirationSeconds;
     const maxUploadBytes = typeof hosting.maxUploadBytes === "number"
         ? Math.max(64 * 1024, Math.min(32 * 1024 * 1024, Math.floor(hosting.maxUploadBytes)))
         : DEFAULT_IMAGE_GENERATION_SETTINGS.imageHosting.maxUploadBytes;
-
-    const rawOpenAiPresets = settings?.openaiPresets;
-    const openaiPresets = Array.isArray(rawOpenAiPresets) && rawOpenAiPresets.length > 0
-        ? rawOpenAiPresets.map((preset, index) => normalizeOpenAiPreset(preset, index))
-        : [normalizeOpenAiPreset({
-            id: "preset_openai_default",
-            name: "默认方案",
-            requestMode,
-            apiKey: settings?.apiKey,
-            baseUrl: settings?.baseUrl,
-            model: settings?.model,
-            size: settings?.size,
-            quality: settings?.quality,
-            extraPrompt: settings?.extraPrompt,
-        }, 0)];
-    const activeOpenAiPresetId = typeof settings?.activeOpenAiPresetId === "string"
-        && openaiPresets.some(preset => preset.id === settings.activeOpenAiPresetId)
-        ? settings.activeOpenAiPresetId
-        : openaiPresets[0].id;
-    const activeOpenAiPreset = openaiPresets.find(preset => preset.id === activeOpenAiPresetId) || openaiPresets[0];
-
-    const rawNai = settings?.novelai;
-    let naiPresets = Array.isArray(rawNai?.presets) && rawNai.presets.length > 0
-        ? rawNai.presets.map((p, idx) => normalizeNovelAiPreset(p, idx))
-        : [DEFAULT_NOVELAI_PRESET];
-    let activePresetId = typeof rawNai?.activePresetId === "string" ? rawNai.activePresetId : naiPresets[0].id;
-    if (!naiPresets.some(p => p.id === activePresetId)) {
-        activePresetId = naiPresets[0].id;
-    }
-
-    const novelai: import("./settings-types").NovelAiSettings = {
-        apiKey: typeof rawNai?.apiKey === "string" ? rawNai.apiKey : "",
-        activePresetId,
-        presets: naiPresets,
-    };
-
     return {
         ...DEFAULT_IMAGE_GENERATION_SETTINGS,
         ...(settings || {}),
-        provider,
-        requestMode: activeOpenAiPreset.requestMode,
-        apiKey: activeOpenAiPreset.apiKey,
-        baseUrl: activeOpenAiPreset.baseUrl,
-        model: activeOpenAiPreset.model,
-        size: activeOpenAiPreset.size,
-        quality: activeOpenAiPreset.quality,
-        extraPrompt: activeOpenAiPreset.extraPrompt,
-        openaiPresets,
-        activeOpenAiPresetId,
-        novelai,
+        requestMode,
         characterReferences: refs,
         imageHosting: {
             ...DEFAULT_IMAGE_GENERATION_SETTINGS.imageHosting,
             ...hosting,
-            provider: hostingProvider,
+            provider,
             defaultExpirationSeconds,
             maxUploadBytes,
             autoConvertToWebp: hosting.autoConvertToWebp !== false,
@@ -990,7 +761,7 @@ function normalizeBindingConfig(config: BindingConfig): { config: BindingConfig;
 export function loadBindingConfig(): BindingConfig {
     if (typeof window === "undefined") return { ...DEFAULT_BINDING_CONFIG };
     try {
-        const raw = kvGet(BINDINGS_KEY);
+        const raw = kvGet(BINDINGS_KEY) ?? kvGet(IDENTITY_BASE_BINDING_KEY);
         if (!raw) {
             // Attempt migration from legacy overrides
             const migrated = migrateLegacyOverrides();
@@ -1002,6 +773,7 @@ export function loadBindingConfig(): BindingConfig {
         }
         const normalized = normalizeBindingConfig(JSON.parse(raw) as BindingConfig);
         if (normalized.changed) saveBindingConfig(normalized.config, false);
+        if (isIdentityInitialized()) normalized.config.globalDefaults.userIdentityId = getCurrentIdentityId() ?? undefined;
         return normalized.config;
     } catch {
         return { ...DEFAULT_BINDING_CONFIG };
@@ -1010,6 +782,7 @@ export function loadBindingConfig(): BindingConfig {
 
 export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
     if (typeof window === "undefined") return;
+    if (isIdentityInitialized()) config.globalDefaults.userIdentityId = getCurrentIdentityId() ?? undefined;
     kvSet(BINDINGS_KEY, JSON.stringify(config));
     if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
 }
@@ -1023,6 +796,7 @@ export function saveBindingConfig(config: BindingConfig, notify: boolean = true)
  */
 export function ensureGlobalBindingDefaults(): void {
     if (typeof window === "undefined") return;
+    if (isIdentityInitialized() && !getCurrentIdentityId()) return;
     const config = loadBindingConfig();
     const global = config.globalDefaults;
     let changed = false;
@@ -1038,7 +812,7 @@ export function ensureGlobalBindingDefaults(): void {
         changed = true;
     }
     const identities = loadUserIdentities();
-    if (identities.length > 0 && !identities.some(i => i.id === global.userIdentityId)) {
+    if (!isIdentityInitialized() && identities.length > 0 && !identities.some(i => i.id === global.userIdentityId)) {
         global.userIdentityId = identities[0].id;
         changed = true;
     }
@@ -1134,12 +908,9 @@ export function resolveBinding(
         if (slot.apiConfigId) resolved.apiConfigId = slot.apiConfigId;
         if (slot.voiceConfigId) resolved.voiceConfigId = slot.voiceConfigId;
         if (slot.presetId) resolved.presetId = slot.presetId;
-        if (slot.userIdentityId) resolved.userIdentityId = slot.userIdentityId;
         if (slot.worldBookIds && slot.worldBookIds.length > 0) resolved.worldBookIds = [...slot.worldBookIds];
         if (slot.regexIds && slot.regexIds.length > 0) resolved.regexIds = [...slot.regexIds];
     };
-
-    if (!characterId) return resolved;
 
     // Apply character defaults
     const charBinding = config.characterBindings.find(b => b.characterId === characterId);
@@ -1155,6 +926,7 @@ export function resolveBinding(
         applySlot(charBinding.appOverrides[appId]!);
     }
 
+    if (isIdentityInitialized()) resolved.userIdentityId = getCurrentIdentityId() ?? undefined;
     return resolved;
 }
 
@@ -1274,12 +1046,24 @@ export function saveChatSendConfig(config: ChatSendConfig): void {
 
 // --- User Identities ──────────────────────────────────────────
 
+let userIdentitiesRaw: string | null | undefined;
+let userIdentitiesCache: UserIdentity[] = [];
+
 export function loadUserIdentities(): UserIdentity[] {
     if (typeof window === "undefined") return [];
     try {
         const raw = kvGet(USER_IDENTITIES_KEY);
-        if (!raw) return [];
-        return JSON.parse(raw) as UserIdentity[];
+        if (raw !== userIdentitiesRaw) {
+            userIdentitiesRaw = raw;
+            userIdentitiesCache = [];
+            const parsed: unknown = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(parsed)) userIdentitiesCache = parsed;
+        }
+        // Keep callers' editable copies independent without reparsing embedded avatars.
+        return userIdentitiesCache.map(identity => ({
+            ...identity,
+            ...(identity.previousNames ? { previousNames: [...identity.previousNames] } : {}),
+        }));
     } catch {
         return [];
     }
@@ -1287,7 +1071,15 @@ export function loadUserIdentities(): UserIdentity[] {
 
 export function saveUserIdentities(identities: UserIdentity[]): void {
     if (typeof window === "undefined") return;
+    const previous = loadUserIdentities();
+    identities = identities.map(identity => {
+        const old = previous.find(item => item.id === identity.id);
+        return old
+            ? { ...identity, previousNames: [...new Set([...(old.previousNames ?? []), ...(identity.previousNames ?? []), ...(old.name !== identity.name ? [old.name] : [])])] }
+            : identity;
+    });
     kvSet(USER_IDENTITIES_KEY, JSON.stringify(identities));
+    updateIdentityDirectory(identities);
 }
 
 /**
@@ -1298,6 +1090,7 @@ export function saveUserIdentities(identities: UserIdentity[]): void {
 export function resolveUserIdentity(characterId?: string, appId?: string): UserIdentity | null {
     const identities = loadUserIdentities();
     if (identities.length === 0) return null;
+    if (isIdentityInitialized()) return identities.find(identity => identity.id === getCurrentIdentityId()) ?? null;
     const config = loadBindingConfig();
     const resolved = resolveBinding(config, characterId, appId);
     if (resolved.userIdentityId) {

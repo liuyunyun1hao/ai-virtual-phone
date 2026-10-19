@@ -4,8 +4,10 @@
 import { createContext, useContext, useState, useRef, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type { MusicTrack } from "./music-storage";
 import { getAudioBlob, markTrackPlayed } from "./music-storage";
+import { getListeningRoom } from "./listen-together";
 import { findPlayableMatch, getNeteaseLyrics, getNeteasePlayUrl, getNeteasePlayInfo, getNeteaseSongDetail } from "./music-service";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
+import { getCurrentIdentityId } from "./identity-runtime";
 import { registerMusicControlBridge } from "./music-control-bridge";
 
 // ── Types ──
@@ -22,6 +24,7 @@ export type MusicState = {
     volume: number;
     showFullPlayer: boolean;
     floatDismissed: boolean;
+    floatEnabled: boolean;
 };
 
 export type MusicActions = {
@@ -39,6 +42,7 @@ export type MusicActions = {
     setVolume: (vol: number) => void;
     stop: () => void;
     dismissFloat: () => void;
+    setFloatEnabled: (enabled: boolean) => void;
     openFullPlayer: () => void;
     closeFullPlayer: () => void;
 };
@@ -73,6 +77,8 @@ export function useMusicControlsOptional(): MusicControlsValue | null {
 // ── Queue persistence ──
 
 const QUEUE_STORAGE_KEY = "ai_phone_music_queue_v1";
+const FLOAT_STORAGE_KEY = "ai_phone_music_float_enabled_v1";
+registerKvMigration(FLOAT_STORAGE_KEY);
 registerKvMigration(QUEUE_STORAGE_KEY);
 const QUEUE_MAX_SIZE = 200;
 
@@ -94,6 +100,7 @@ function persistQueue(q: MusicTrack[]): void {
 
 export function MusicProvider({ children }: { children: ReactNode }) {
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const audioTrackId = useRef<string | null>(null);
     const blobUrlRef = useRef<string | null>(null);
 
     const [currentTrack, setCurrentTrack] = useState<MusicTrack | null>(null);
@@ -105,6 +112,12 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     const [volume, setVolumeState] = useState(0.8);
     const [showFullPlayer, setShowFullPlayer] = useState(false);
     const [floatDismissed, setFloatDismissed] = useState(false);
+    const [floatEnabled, setFloatEnabledState] = useState(() => kvGet(FLOAT_STORAGE_KEY) !== "false");
+    const setFloatEnabled = useCallback((enabled: boolean) => {
+        setFloatEnabledState(enabled);
+        setFloatDismissed(false);
+        kvSet(FLOAT_STORAGE_KEY, String(enabled));
+    }, []);
 
     // Persist queue on change.
     useEffect(() => {
@@ -164,6 +177,8 @@ export function MusicProvider({ children }: { children: ReactNode }) {
                     const nextIdx = idx + 1;
                     if (nextIdx < q.length) {
                         nextTrack = q[nextIdx];
+                    } else if (getListeningRoom()?.status === "joined") {
+                        nextTrack = q[0];
                     }
                 }
 
@@ -212,6 +227,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
             track = { ...track, lastPlayedAt: playedAt };
         }
 
+        audioTrackId.current = track.id;
         setCurrentTrack(track);
         setCurrentTime(0);
 
@@ -235,6 +251,7 @@ export function MusicProvider({ children }: { children: ReactNode }) {
         cleanupBlobUrl();
         audio.pause();
         audio.src = url;
+        audioTrackId.current = track.id;
         setCurrentTrack(track);
         setCurrentTime(0);
         audio.play().catch(() => {});
@@ -324,7 +341,6 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const dismissFloat = useCallback(() => {
-        audioRef.current?.pause();
         setFloatDismissed(true);
     }, []);
 
@@ -420,11 +436,14 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     }, [playResolvedTrack, queue]);
 
     useEffect(() => {
+        const identityId = getCurrentIdentityId();
         registerMusicControlBridge({
             getState: () => ({
-                currentTrack,
-                isPlaying,
-                currentTime,
+                identityId,
+                currentTrack: audioTrackId.current === currentTrack?.id ? currentTrack : null,
+                selectedTrack: currentTrack,
+                isPlaying: audioRef.current ? !audioRef.current.paused : isPlaying,
+                currentTime: audioRef.current?.currentTime ?? currentTime,
                 duration,
                 playMode,
                 queue,
@@ -447,11 +466,11 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     ]);
 
     const controlsValue = useMemo<MusicControlsValue>(() => ({
-        currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed,
+        currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed, floatEnabled, setFloatEnabled,
         playTrack, playUrl, pause, resume, togglePlay, next, prev, seek,
         setPlayMode, setQueue, removeFromQueue, setVolume, stop, dismissFloat, openFullPlayer, closeFullPlayer,
     }), [
-        currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed,
+        currentTrack, isPlaying, duration, playMode, queue, volume, showFullPlayer, floatDismissed, floatEnabled, setFloatEnabled,
         playTrack, playUrl, pause, resume, togglePlay, next, prev, seek,
         setQueue, removeFromQueue, setVolume, stop, dismissFloat, openFullPlayer, closeFullPlayer,
     ]);

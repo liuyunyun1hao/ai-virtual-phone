@@ -7,6 +7,7 @@ const CLOUD_BACKUP_CONFIG_KEY = "ai_phone_cloud_backup_config_v1";
 registerKvMigration(CLOUD_BACKUP_CONFIG_KEY);
 
 export type CloudBackupConfig = {
+  backupScope?: "current" | "all";
   /** User's Supabase project URL, e.g. https://xxxx.supabase.co */
   url: string;
   /** User's Supabase service_role key (needed to auto-create the bucket). */
@@ -31,7 +32,8 @@ export const DEFAULT_CLOUD_BACKUP_CONFIG: CloudBackupConfig = {
   enabled: false,
   intervalHours: 6,
   keepCount: 3,
-  excludeMedia: true,
+  excludeMedia: false,
+  backupScope: "all",
 };
 
 /** Strip trailing slashes; tolerate a pasted URL with or without protocol. */
@@ -52,7 +54,8 @@ export function loadCloudBackupConfig(): CloudBackupConfig {
       enabled: Boolean(parsed.enabled),
       intervalHours: clampInterval(parsed.intervalHours),
       keepCount: clampKeepCount(parsed.keepCount),
-      excludeMedia: parsed.excludeMedia !== false,
+      excludeMedia: parsed.excludeMedia === true,
+      backupScope: parsed.backupScope === "current" ? "current" : "all",
       managedProjectRef: typeof parsed.managedProjectRef === "string" ? parsed.managedProjectRef : undefined,
       managedOrganizationSlug: typeof parsed.managedOrganizationSlug === "string" ? parsed.managedOrganizationSlug : undefined,
     };

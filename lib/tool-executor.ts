@@ -1,3 +1,4 @@
+import { identityLocalStorage, identityIndexedDbFactory, physicalIdentityKey, assertIdentityActive } from "@/lib/identity-runtime";
 import type {
     CompositeToolConfig,
     CompositeToolPackageConfig,
@@ -28,7 +29,7 @@ import { bridgeConnection, loadBridgeDataItems, loadBridgeShortcutActions, readA
 import { createShortcutCommand, deliverShortcutCommand, waitForShortcutCommand } from "./shortcut-command-client";
 import { loadMemoryEntriesByType, saveMemoryEntry } from "./memory-storage";
 import type { MemoryEntry } from "./memory-types";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import {
     deleteCalendarScheduleItem,
     loadCalendarWeekPlan,
@@ -654,7 +655,15 @@ async function executeCompositeScriptStep(
         const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as {
             new (...args: string[]): (...values: unknown[]) => Promise<unknown>;
         };
-        const runner = new AsyncFunction("input", "steps", "last", "args", "context", script);
+        assertIdentityActive();
+        const scopedIndexedDb = identityIndexedDbFactory();
+        const scopedWindow = new Proxy(window, { get(target, property) {
+            if (property === "localStorage") return identityLocalStorage;
+            if (property === "indexedDB") return scopedIndexedDb;
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+        } });
+        const runner = new AsyncFunction("input", "steps", "last", "args", "context", "window", "localStorage", "indexedDB", "identityKey", script);
         const value = await runner(
             scope.input,
             scope.steps,
@@ -667,6 +676,7 @@ async function executeCompositeScriptStep(
                 stepName: step.name || step.saveAs || "脚本步骤",
                 saveAs: step.saveAs,
             },
+            scopedWindow, identityLocalStorage, scopedIndexedDb, physicalIdentityKey,
         );
         return {
             name: step.name || step.saveAs || "脚本步骤",
@@ -4021,7 +4031,7 @@ function persistMcpOAuthState(server: McpServerConfig): void {
 function readStorageJson<T>(key: string): T | null {
     if (typeof window === "undefined") return null;
     try {
-        const raw = window.localStorage.getItem(key);
+        const raw = identityLocalStorage.getItem(key);
         if (!raw) return null;
         return JSON.parse(raw) as T;
     } catch {
@@ -4032,14 +4042,14 @@ function readStorageJson<T>(key: string): T | null {
 function writeStorageJson(key: string, value: unknown): void {
     if (typeof window === "undefined") return;
     try {
-        window.localStorage.setItem(key, JSON.stringify(value));
+        identityLocalStorage.setItem(key, JSON.stringify(value));
     } catch { /* ignore storage failures */ }
 }
 
 function removeStorageKey(key: string): void {
     if (typeof window === "undefined") return;
     try {
-        window.localStorage.removeItem(key);
+        identityLocalStorage.removeItem(key);
     } catch { /* ignore storage failures */ }
 }
 

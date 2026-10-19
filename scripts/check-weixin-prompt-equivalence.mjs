@@ -20,9 +20,6 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// 注意：这里必须用 fileURLToPath，不能用 new URL(import.meta.url).pathname ——
-// 后者在 Windows 上会得到 "/D:/..."，再经 pathToFileURL 拼成 "file:///D:/D:/..."，
-// 导致下面 hooks 里解析 typescript 与 @/lib 全部 ERR_MODULE_NOT_FOUND（脚本在 Windows 上跑不起来）。
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // weixin-cloud-sync 是 TS 且依赖浏览器侧模块，注册一个即时转译 + 桩件的加载器跑起来。
@@ -35,7 +32,7 @@ import ts from ${JSON.stringify(pathToFileURL(path.join(root, "node_modules/type
 const ROOT = ${JSON.stringify(root)};
 const EXTS = ["", ".ts", ".tsx", "/index.ts", "/index.tsx", ".mjs", ".js"];
 // Dexie 是 CJS，ESM 具名导入拿不到 default；这里只需要它能被 import 而已。
-const STUBS = { dexie: "export default class Dexie { version(){return{stores(){return{upgrade(){}}}}} table(){return{}} open(){return Promise.resolve()} }" };
+const STUBS = { dexie: "export default class Dexie { use(){} version(){return{stores(){return{upgrade(){}}}}} table(){return{}} open(){return Promise.resolve()} }" };
 
 export async function resolve(specifier, context, next) {
   if (STUBS[specifier]) {
@@ -45,7 +42,13 @@ export async function resolve(specifier, context, next) {
   if (spec.startsWith("@/")) spec = pathToFileURL(resolvePath(ROOT, spec.slice(2))).href;
   else if (spec.startsWith(".") && context.parentURL?.startsWith("file:")) {
     spec = pathToFileURL(resolvePath(dirname(fileURLToPath(context.parentURL)), spec)).href;
-  } else return next(specifier, context);
+  } else {
+    try { return await next(specifier, context); }
+    catch (error) {
+      if (error.code === "ERR_MODULE_NOT_FOUND" && specifier.includes("/") && !specifier.endsWith(".js")) return next(specifier + ".js", context);
+      throw error;
+    }
+  }
   for (const ext of EXTS) {
     try { readFileSync(fileURLToPath(spec + ext)); return { url: spec + ext, shortCircuit: true, format: "module" }; } catch {}
   }

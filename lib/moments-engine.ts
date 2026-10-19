@@ -4,7 +4,7 @@
 // Prompts are assembled through the shared assemblePromptPayload() pipeline,
 // ensuring full character settings, world books, long-term memory, and user persona.
 
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { loadChatContacts } from "./chat-storage";
 import type { Character } from "./character-types";
 import {
@@ -51,7 +51,7 @@ import { previewMessagesForApi, sendLLMRequest } from "./chat-engine";
 import { bgSetInterval } from "./bg-timer";
 import { sendBrowserNotification } from "./browser-notification";
 import { buildTwoLevelMomentThreads } from "./moments-comment-threading";
-import { DEFAULT_MOMENTS_BILINGUAL_PROMPT, resolveBilingualPrompt } from "./bilingual-prompt-defaults";
+import { buildMomentsBilingualInstruction } from "./moments-bilingual";
 import { generateImageFromConfiguredApi } from "./image-generation-service";
 import { isAbortError, throwIfAborted } from "./abort-utils";
 import { getChatImageFromIndexedDB, saveChatImageToIndexedDB } from "./chat-asset-storage";
@@ -169,10 +169,6 @@ type AssemblerResult = {
     preset: PresetConfig | null;
     character: Character;
 };
-
-function buildMomentsBilingualInstruction(enabled: boolean, customPrompt?: string): string {
-    return resolveBilingualPrompt(enabled, customPrompt, DEFAULT_MOMENTS_BILINGUAL_PROMPT);
-}
 
 /**
  * Resolve all inputs needed for assemblePromptPayload(), following the same
@@ -1158,11 +1154,7 @@ export function parseMomentPostResponse(rawText: string): {
     const photoDescription = explicitPhotoMatch
         ? explicitPhotoMatch[2].trim()
         : legacyPhotoMatch ? legacyPhotoMatch[1].trim() : undefined;
-    const photoUseReferenceImage = explicitPhotoMatch
-        ? explicitPhotoMatch[1] === "使用参考图"
-        : legacyPhotoMatch
-            ? /(?:自拍|对镜拍|selfie)/i.test(photoDescription || "")
-            : false;
+    const photoUseReferenceImage = explicitPhotoMatch ? explicitPhotoMatch[1] === "使用参考图" : false;
 
     const content = text
         .replace(/\[照片[:：]\s*(?:使用参考图|不使用参考图)\s*[:：]\s*[\s\S]*?\]/g, "")

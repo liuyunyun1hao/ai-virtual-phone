@@ -1,11 +1,10 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // lib/tts-service.ts — 语音合成服务
 
 import type { VoiceApiConfig, ContentAppId } from "./settings-types";
-import { stripAudioTags } from "./audio-tags";
-
-// 以前有代码从 tts-service 引 stripAudioTags，保持可用
-export { stripAudioTags };
 import { loadVoiceConfigs, loadBindingConfig, resolveBinding } from "./settings-storage";
+import { synthesizeElevenLabs } from "./elevenlabs-tts";
+import { supportsVoiceExpression } from "./voice-expression";
 
 export type VoiceApiConfigResolved = VoiceApiConfig;
 
@@ -29,53 +28,32 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * Supported providers:
  * - Minimax: REST API → hex-encoded mp3
  * - OpenAI: REST API → binary audio blob
+ * - ElevenLabs: REST API → binary MP3 (shared by previews, bubbles and calls)
  */
 export async function synthesizeSpeech(
     text: string,
     voiceConfig: VoiceApiConfig,
     options?: { emotion?: string },
 ): Promise<Blob | null> {
+    const { assertIdentityActive } = await import("./identity-runtime");
+    assertIdentityActive();
     if (!text.trim()) return null;
 
     const provider = voiceConfig.provider;
-
-    // 方括号语气标签（[exhales softly] / [whispers]）只有 ElevenLabs 的 v3/v4 会
-    // "演"成语气。换成别的服务商，它们会被当成正文照念出来 —— 试听时会听到
-    // 机械地念出 "exhales softly"，非常破坏气氛。所以送合成前统一剥掉。
-    const tagCapable = provider === "ElevenLabs"
-        && /^eleven_(v3|v4)/i.test(voiceConfig.model || "");
-
-    // 可选：送合成前先让模型把台词改写成带呼吸/动作标签的配音脚本。
-    // 放在这个入口而不是各个调用点，是为了让语音条、语音通话、视频通话、
-    // 群组通话四处自动都生效。
-    // 失败就当没开 —— 改写是锦上添花，不该让语音整个哑掉。
-    let source = text;
-    if (voiceConfig.enableTtsRewrite) {
-        const { rewriteForTts } = await import("./tts-rewrite");
-        const rewritten = await rewriteForTts(text, { apiConfigId: voiceConfig.rewriteApiConfigId });
-        if (rewritten.text && !rewritten.error) source = rewritten.text;
-        else if (rewritten.error) console.warn("[tts] 改写失败，用原文合成:", rewritten.error);
-    }
-
-    const speakable = tagCapable ? source : stripAudioTags(source);
-    if (!speakable.trim()) return null;
+    // Stored expressive speech may be replayed after the user changes provider/model.
+    if (!supportsVoiceExpression(provider, voiceConfig.model)) text = text.replace(/\[[a-zA-Z][a-zA-Z ,'-]{0,100}\]/g, "").trim();
+    if (provider === "ElevenLabs") return synthesizeElevenLabs(text, voiceConfig);
 
     if (provider === "Minimax") {
-        return synthesizeMinimax(speakable, voiceConfig, options?.emotion);
+        return synthesizeMinimax(text, voiceConfig, options?.emotion);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(speakable, voiceConfig);
-    }
-
-    if (provider === "ElevenLabs") {
-        return synthesizeElevenLabs(speakable, voiceConfig);
+        return synthesizeOpenAI(text, voiceConfig);
     }
 
     return null;
 }
-
-// 标签规则收敛到 lib/audio-tags.ts —— 显示层和合成层共用同一套
 
 // A stalled TTS request (TCP connected but no response — cold start, rate-limit
 // hold, network blip) would otherwise hang forever, since fetch has no default
@@ -205,61 +183,6 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
     return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
 }
 
-// ── ElevenLabs ────────────────────────────────────────────────────────
-// POST /v1/text-to-speech/{voice_id}?output_format=mp3_44100_128
-// 鉴权走 xi-api-key 头（不是 Bearer）。字段名照 openapi.json 核过：
-//   text(必填) / model_id / voice_settings{stability, similarity_boost, style, use_speaker_boost, speed}
-// 音频标签（[whispers] 这种方括号）只有部分模型支持，v4 / v3 / v4_turbo 支持。
-// 实测 api.elevenlabs.io 的 CORS 是 allow-origin:* + allow-headers:*，浏览器可直连，不需要服务端转发。
-const ELEVENLABS_DEFAULT_BASE_URL = "https://api.elevenlabs.io/v1";
-const ELEVENLABS_DEFAULT_MODEL = "eleven_v4";
-// 文档示例里常用的一个公开音色（Rachel），只作占位，用户应换成自己的 voice id
-const ELEVENLABS_DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM";
-const ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "mp3_44100_128";
-
-function clamp01(v: number | undefined, fallback: number): number {
-    if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
-    return Math.min(1, Math.max(0, v));
-}
-
-async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
-    if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
-
-    const baseUrl = (config.baseUrl || ELEVENLABS_DEFAULT_BASE_URL).replace(/\/$/, "");
-    const voiceId = config.defaultVoice || ELEVENLABS_DEFAULT_VOICE;
-    const url = `${baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}`
-        + `?output_format=${encodeURIComponent(config.outputFormat || ELEVENLABS_DEFAULT_OUTPUT_FORMAT)}`;
-
-    const response = await fetchWithTimeout(url, {
-        method: "POST",
-        headers: {
-            "xi-api-key": config.apiKey,
-            "Content-Type": "application/json",
-            Accept: "audio/mpeg",
-        },
-        body: JSON.stringify({
-            text,
-            model_id: config.model || ELEVENLABS_DEFAULT_MODEL,
-            voice_settings: {
-                stability: clamp01(config.stability, 0.5),
-                similarity_boost: clamp01(config.similarityBoost, 0.75),
-                style: clamp01(config.styleExaggeration, 0),
-                use_speaker_boost: true,
-                // 这里复用 Minimax 那个语速字段，两边语义一致（1.0 = 原速）
-                speed: Math.min(2, Math.max(0.5, config.speechSpeed ?? 1)),
-            },
-        }),
-    });
-
-    if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        throw new Error(`ElevenLabs TTS 请求失败 (${response.status}): ${errText.slice(0, 300)}`);
-    }
-
-    const blob = await response.blob();
-    return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
-}
-
 // ── iOS audio playback that coexists with speech recognition ──────────
 // On iOS Safari, playing TTS through an <audio> element keeps the system audio
 // session in "playback" mode, which steals the mic from webkitSpeechRecognition
@@ -281,7 +204,7 @@ const TTS_VOLUME_KEY = "ai_phone_tts_volume_v1";
 let _ttsVolume = ((): number => {
     if (typeof window === "undefined") return 1;
     try {
-        const raw = window.localStorage.getItem(TTS_VOLUME_KEY);
+        const raw = identityLocalStorage.getItem(TTS_VOLUME_KEY);
         const v = raw == null ? 1 : Number(raw);
         return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
     } catch { return 1; }
@@ -296,7 +219,7 @@ export function getTtsVolume(): number {
 
 export function setTtsVolume(volume: number): void {
     _ttsVolume = Math.min(1, Math.max(0, volume));
-    try { window.localStorage.setItem(TTS_VOLUME_KEY, String(_ttsVolume)); } catch { /* ignore */ }
+    try { identityLocalStorage.setItem(TTS_VOLUME_KEY, String(_ttsVolume)); } catch { /* ignore */ }
     if (_activeGain) { try { _activeGain.gain.value = _ttsVolume; } catch { /* ignore */ } }
     if (_sharedAudio) { try { _sharedAudio.volume = _ttsVolume; } catch { /* ignore */ } }
 }
@@ -336,22 +259,18 @@ function getSharedAudio(): HTMLAudioElement {
 }
 
 function silentWavUrl(): string {
-    // A few ms of 16-bit mono PCM silence — a valid source so play() actually
+    // A few ms of 8-bit mono PCM silence — a valid source so play() actually
     // starts (and thus unlocks the element) on iOS.
-    // 采样率用 48kHz 而不是 8kHz：iOS 的系统音频会话采样率会跟着刚播放的媒体走，
-    // 解锁音若是 8kHz，紧接着播的 TTS 会被压到 4kHz 以下而发闷（与保活音同理）。
-    const sampleRate = 48000;
-    const numSamples = 96; // 2ms
-    const dataSize = numSamples * 2;
-    const buffer = new ArrayBuffer(44 + dataSize);
+    const numSamples = 16;
+    const buffer = new ArrayBuffer(44 + numSamples);
     const view = new DataView(buffer);
     const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-    writeStr(0, "RIFF"); view.setUint32(4, 36 + dataSize, true); writeStr(8, "WAVE");
+    writeStr(0, "RIFF"); view.setUint32(4, 36 + numSamples, true); writeStr(8, "WAVE");
     writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-    writeStr(36, "data"); view.setUint32(40, dataSize, true);
-    // 16-bit PCM 静音为 0，ArrayBuffer 默认全 0，无需再写
+    view.setUint16(22, 1, true); view.setUint32(24, 8000, true); view.setUint32(28, 8000, true);
+    view.setUint16(32, 1, true); view.setUint16(34, 8, true);
+    writeStr(36, "data"); view.setUint32(40, numSamples, true);
+    for (let i = 0; i < numSamples; i++) view.setUint8(44 + i, 128); // 8-bit silence = 128
     return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
 }
 

@@ -10,6 +10,11 @@
  */
 
 import type { ChatMessage } from "./chat-storage";
+import { voiceDisplayText, voiceSpeechText } from "./voice-expression";
+import type { MultiImageChatPlan, MultiImageExpressionStyle } from "./image-delivery-protocol";
+import { isImageGridCount } from "./image-grid-split";
+import { parsePhotoDoodle } from "./photo-doodle";
+import { canUseEcho } from "./chat-echo";
 import type { StateValue } from "./chat-storage";
 import { parseStateValues, mergeStateValues } from "./state-value-parser";
 import { stripActionShells } from "./action-parser";
@@ -57,6 +62,32 @@ export function isInvisibleOrWhitespaceOnly(text: string): boolean {
 
 const C = "\\s*[：:]\\s*"; // half-width or full-width colon, allowing surrounding spaces
 
+function parseMultiImageChatPlan(raw: string): MultiImageChatPlan | null {
+    try {
+        const value = JSON.parse(raw.trim()) as Record<string, unknown>;
+        const displayImageCount = Number(value.count);
+        if (!isImageGridCount(displayImageCount)) return null;
+        const visualIntent = typeof value.visualIntent === "string" ? value.visualIntent.trim() : "";
+        const shots = Array.isArray(value.shots)
+            ? value.shots.map(shot => typeof shot === "string" ? shot.trim() : "").filter(Boolean)
+            : [];
+        if (!visualIntent || shots.length !== displayImageCount) return null;
+        const requestedStyle = value.characterExpressionStyle;
+        const characterExpressionStyle: MultiImageExpressionStyle = requestedStyle === "expressive" || requestedStyle === "subtle"
+            ? requestedStyle
+            : "infer_from_context";
+        return {
+            displayImageCount,
+            visualIntent,
+            shots,
+            characterExpressionStyle,
+            useReferenceImage: value.useReferenceImage === true,
+        };
+    } catch {
+        return null;
+    }
+}
+
 function parseMuteMinutes(num?: string, unit?: string): number {
     const n = parseInt(num || "", 10);
     if (!Number.isFinite(n) || n <= 0) return 10;
@@ -88,17 +119,18 @@ const RICH_PATTERNS: {
         }),
     },
     {
-        // 兼容两种格式：[转账:金额:留言] (1:1) 和 [转账:金额:留言:转账人:收款人] (群聊)
-        regex: /\[转账[：:](\d+(?:\.\d+)?)[：:]([^\]：:]*?)(?:[：:]([^\]：:]*?)[：:]([^\]]*?))?\]/,
+        // 兼容旧格式，并支持 [转账:金额:币种:留言] 及群聊双方字段。
+        regex: /\[转账[：:](\d+(?:\.\d+)?)[：:](?:([A-Za-z]{3})[：:])?([^\]：:]*?)(?:[：:]([^\]：:]*?)[：:]([^\]]*?))?\]/,
         build: (m) => ({
             content: "",
             mediaType: "transfer",
             mediaData: {
                 amount: parseFloat(m[1]),
-                label: m[2]?.trim() || "转账",
+                currency: m[2]?.toUpperCase() || "CNY",
+                label: m[3]?.trim() || "转账",
                 status: "pending" as const,
-                senderName: m[3]?.trim() || "",
-                recipientName: m[4]?.trim() || "",
+                senderName: m[4]?.trim() || "",
+                recipientName: m[5]?.trim() || "",
             },
         }),
     },
@@ -166,6 +198,114 @@ const RICH_PATTERNS: {
         }),
     },
     {
+        // A character can change the private-chat remark shown on the user's phone.
+        regex: /\[修改备注[：:]([^\]\r\n]{1,40})\]/,
+        build: (m) => ({
+            content: "",
+            mediaType: "private_alias_action",
+            mediaData: { chatRenameKind: "private_alias", chatRenameValue: m[1].trim() },
+        }),
+    },
+    {
+        // A group member can rename the current group chat.
+        regex: /\[修改群名[：:]([^\]\r\n]{1,40})\]/,
+        build: (m) => ({
+            content: "",
+            mediaType: "group_name_action",
+            mediaData: { chatRenameKind: "group_name", chatRenameValue: m[1].trim() },
+        }),
+    },
+    {
+        regex: /\[照片涂鸦\]([\s\S]*?)\[\/照片涂鸦\]/,
+        build: (m) => ({ content: "", mediaType: "photo_markup_action", mediaData: parsePhotoDoodle(m[1]) }),
+    },
+    {
+        // Emoji collage with scale and rotation. Example:
+        // [照片贴图:第3张:70:25:1.6:-12:👻:挡住脸]
+        regex: new RegExp(`\\[照片贴图${C}第?(\\d{1,2})张${C}(\\d{1,3})${C}(\\d{1,3})${C}([\\d.]+)${C}(-?\\d{1,3})${C}([^：:\\]\\r\\n]+)${C}([^\\]]+)\\]`),
+        build: (m) => ({
+            content: "",
+            mediaType: "photo_markup_action",
+            mediaData: {
+                photoMarkKind: "emoji",
+                photoMarkTargetIndex: Math.max(0, Number(m[1]) - 1),
+                photoMarkX: Math.max(0, Math.min(100, Number(m[2]))) / 100,
+                photoMarkY: Math.max(0, Math.min(100, Number(m[3]))) / 100,
+                photoMarkScale: Math.max(.5, Math.min(4, Number(m[4]))),
+                photoMarkRotation: Math.max(-180, Math.min(180, Number(m[5]))),
+                photoMarkEmoji: m[6].trim(),
+                photoMarkText: m[7].trim(),
+            },
+        }),
+    },
+    {
+        // [照片贴图:70:25:1.6:-12:👻:挡住脸]
+        regex: new RegExp(`\\[照片贴图${C}(\\d{1,3})${C}(\\d{1,3})${C}([\\d.]+)${C}(-?\\d{1,3})${C}([^：:\\]\\r\\n]+)${C}([^\\]]+)\\]`),
+        build: (m) => ({
+            content: "",
+            mediaType: "photo_markup_action",
+            mediaData: {
+                photoMarkKind: "emoji",
+                photoMarkX: Math.max(0, Math.min(100, Number(m[1]))) / 100,
+                photoMarkY: Math.max(0, Math.min(100, Number(m[2]))) / 100,
+                photoMarkScale: Math.max(.5, Math.min(4, Number(m[3]))),
+                photoMarkRotation: Math.max(-180, Math.min(180, Number(m[4]))),
+                photoMarkEmoji: m[5].trim(),
+                photoMarkText: m[6].trim(),
+            },
+        }),
+    },
+    {
+        // Explicitly target a 1-based item in the latest photo group.
+        // [照片标记:第3张:70:25:圈这里]
+        regex: new RegExp(`\\[照片标记${C}第?(\\d{1,2})张${C}(\\d{1,3})${C}(\\d{1,3})${C}([^\\]]+)\\]`),
+        build: (m) => ({
+            content: "",
+            mediaType: "photo_markup_action",
+            mediaData: {
+                photoMarkTargetIndex: Math.max(0, Number(m[1]) - 1),
+                photoMarkX: Math.max(0, Math.min(100, Number(m[2]))) / 100,
+                photoMarkY: Math.max(0, Math.min(100, Number(m[3]))) / 100,
+                photoMarkText: m[4].trim(),
+            },
+        }),
+    },
+    {
+        // Attach a visible handwritten-style note to the preceding photo.
+        // Coordinates are optional percentages: [照片标记:70:25:看这里]
+        regex: new RegExp(`\\[照片标记${C}(\\d{1,3})${C}(\\d{1,3})${C}([^\\]]+)\\]`),
+        build: (m) => ({
+            content: "",
+            mediaType: "photo_markup_action",
+            mediaData: {
+                photoMarkX: Math.max(0, Math.min(100, Number(m[1]))) / 100,
+                photoMarkY: Math.max(0, Math.min(100, Number(m[2]))) / 100,
+                photoMarkText: m[3].trim(),
+            },
+        }),
+    },
+    {
+        regex: /\[多图\]([\s\S]*?)\[\/多图\]/,
+        build: (m) => {
+            const multiImagePlan = parseMultiImageChatPlan(m[1]);
+            return multiImagePlan
+                ? {
+                    content: "",
+                    mediaType: "image",
+                    mediaData: {
+                        label: multiImagePlan.visualIntent,
+                        useReferenceImage: multiImagePlan.useReferenceImage,
+                        multiImagePlan,
+                    },
+                }
+                : { content: "" };
+        },
+    },
+    {
+        regex: new RegExp(`\\[照片标记${C}([^\\]]+)\\]`),
+        build: (m) => ({ content: "", mediaType: "photo_markup_action", mediaData: { photoMarkText: m[1].trim(), photoMarkX: 0.12, photoMarkY: 0.18 } }),
+    },
+    {
         regex: new RegExp(`\\[照片${C}(使用参考图|不使用参考图)${C}([^\\]]+)\\]`),
         build: (m) => ({
             content: "",
@@ -175,17 +315,11 @@ const RICH_PATTERNS: {
     },
     {
         regex: new RegExp(`\\[照片${C}([^\\]]+)\\]`),
-        build: (m) => {
-            const label = m[1].trim();
-            return {
-                content: "",
-                mediaType: "image",
-                mediaData: {
-                    label,
-                    useReferenceImage: /(?:自拍|对镜拍|selfie)/i.test(label),
-                },
-            };
-        },
+        build: (m) => ({
+            content: "",
+            mediaType: "image",
+            mediaData: { label: m[1].trim(), useReferenceImage: false },
+        }),
     },
     {
         regex: new RegExp(`\\[位置${C}([^\\]]+)\\]`),
@@ -201,6 +335,19 @@ const RICH_PATTERNS: {
             content: "",
             mediaType: "poke" as const,
             mediaData: { pokeSender: m[1]?.trim() || "", pokeTarget: m[2]?.trim() || "" },
+        }),
+    },
+    {
+        regex: new RegExp(`\\[Avatar${C}([^\\]]+)\\]`, "i"),
+        build: (m) => ({ content: "", mediaType: "avatar_action" as const, mediaData: { avatarImageId: m[1]?.trim() || "" } }),
+    },
+    {
+        // Real Tapback action: target resolution is private/group aware (ID/name supported in groups).
+        regex: new RegExp(`\\[Tapback${C}([^\\]]+)\\]`, "i"),
+        build: (m) => ({
+            content: "",
+            mediaType: "tapback_action" as const,
+            mediaData: { tapback: m[1]?.trim() || "" },
         }),
     },
     {
@@ -238,14 +385,15 @@ const RICH_PATTERNS: {
         },
     },
     {
-        // [音乐分享:歌名] — AI shares a song as a card
+        // [音乐分享:歌名|歌手] — keep old title-only messages compatible.
         regex: new RegExp(`\\[音乐分享${C}([^\\]]+)\\]`),
         build: (m) => {
-            const title = m[1].trim();
+            const [title, ...artistParts] = m[1].split("|").map(part => part.trim());
+            const artist = artistParts.join("|");
             return {
                 content: "",
                 mediaType: "music_share" as const,
-                mediaData: { musicTitle: title, label: title },
+                mediaData: { musicTitle: title, ...(artist ? { musicArtist: artist } : {}), label: title },
             };
         },
     },
@@ -255,7 +403,7 @@ const RICH_PATTERNS: {
         build: (m) => ({
             content: "",
             mediaType: "audio" as const,
-            mediaData: { label: m[1].trim() },
+            mediaData: { label: voiceDisplayText(m[1]), ...(m[1].includes("{voice:") ? { speechText: voiceSpeechText(m[1]) } : {}) },
         }),
     },
     {
@@ -596,7 +744,15 @@ function parseSegment(segment: string, parts: ParsedMessagePart[]) {
 export function parseAIResponse(rawText: string, previousState: StateValue[]): ParsedAIResponse {
     // 0. FIRST: extract ```html blocks and <style>+HTML before any processing
     const htmlBlockPlaceholders: { placeholder: string; original: string }[] = [];
-    let protected_ = rawText;
+    // Keep formatted drawing JSON intact when chat paragraphs are split below.
+    let protected_ = rawText.replace(/\[多图\]([\s\S]*?)\[\/多图\]/g, (block, json) => {
+        try { return `[多图]${JSON.stringify(JSON.parse(json))}[/多图]`; }
+        catch { return block; }
+    });
+    protected_ = protected_.replace(/\[照片涂鸦\]([\s\S]*?)\[\/照片涂鸦\]/g, (block, json) => {
+        try { return `[照片涂鸦]${JSON.stringify(JSON.parse(json))}[/照片涂鸦]`; }
+        catch { return block; }
+    });
     // Protect ```html...``` blocks
     protected_ = protected_.replace(/```html\s*\n[\s\S]*?```/g, (match) => {
         const placeholder = `\x00HTML_BLOCK_${htmlBlockPlaceholders.length}\x00`;
@@ -651,8 +807,19 @@ export function parseAIResponse(rawText: string, previousState: StateValue[]): P
 
     // 4. Parse each segment
     const parts: ParsedMessagePart[] = [];
+    let screenEffectUsed = false;
     for (const seg of segments) {
-        parseSegment(seg, parts);
+        const marker = seg.match(/^\[(Echo|Love|Fireworks)\]\s*/i)?.[1]?.toLowerCase() as "echo" | "love" | "fireworks" | undefined;
+        const segmentParts: ParsedMessagePart[] = [];
+        parseSegment(marker ? seg.replace(/^\[(?:Echo|Love|Fireworks)\]\s*/i, "") : seg, segmentParts);
+        // Bind only to the first visible part; never skip an attachment to mark a later text.
+        const first = segmentParts[0];
+        const eligible = !!marker && !!first && canUseEcho(first);
+        if (marker && !screenEffectUsed && first && eligible && !first.content.includes("\x00HTML_BLOCK_")) {
+            first.mediaData = { ...first.mediaData, screenEffect: marker };
+            screenEffectUsed = true;
+        }
+        parts.push(...segmentParts);
     }
 
     // 5. Restore HTML block placeholders and keep unknown bracket protocols as plain text.
@@ -667,8 +834,70 @@ export function parseAIResponse(rawText: string, previousState: StateValue[]): P
         return { ...p, content: display };
     }).filter(p => p.mediaType || !isInvisibleOrWhitespaceOnly(p.content));
 
+    // Markup is an independent action message. The chat runtime resolves it against
+    // the latest photo/current group cover, updates that photo, and stores a visible
+    // action notice so the mark remains part of conversational memory.
+    const annotated: ParsedMessagePart[] = cleaned.flatMap(part => {
+        const plan = part.mediaData?.multiImagePlan;
+        if (part.mediaType !== "image" || !plan || !isImageGridCount(plan.displayImageCount)) return [part];
+        const groupId = `photo_group_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        return plan.shots.map((shot, index): ParsedMessagePart => ({
+            content: "",
+            mediaType: "image",
+            mediaData: {
+                ...part.mediaData,
+                label: shot,
+                photoGroupId: groupId,
+                photoGroupIndex: index,
+                photoGroupCount: plan.displayImageCount,
+                photoKind: "text_photo",
+            },
+        }));
+    });
+
+    // Consecutive photo directives in one reply form one swipeable photo set.
+    // The images remain separate stored messages so vision history, generation retry,
+    // deletion and storage maintenance keep their existing per-image behavior.
+    for (let start = 0; start < annotated.length;) {
+        if (annotated[start].mediaType !== "image") { start += 1; continue; }
+        if (annotated[start].mediaData?.photoGroupId) {
+            const groupId = annotated[start].mediaData?.photoGroupId;
+            while (start < annotated.length && annotated[start].mediaData?.photoGroupId === groupId) start += 1;
+            continue;
+        }
+        let end = start + 1;
+        while (end < annotated.length && annotated[end].mediaType === "image" && !annotated[end].mediaData?.photoGroupId) end += 1;
+        const count = end - start;
+        if (isImageGridCount(count)) {
+            const groupId = `photo_group_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const shots = annotated.slice(start, end).map(part => part.mediaData?.label?.trim() || "独立照片");
+            const multiImagePlan: MultiImageChatPlan = {
+                displayImageCount: count,
+                visualIntent: shots.join("；"),
+                shots,
+                characterExpressionStyle: "infer_from_context",
+                useReferenceImage: annotated.slice(start, end).some(part => part.mediaData?.useReferenceImage === true),
+            };
+            for (let index = start; index < end; index += 1) {
+                annotated[index] = {
+                    ...annotated[index],
+                    mediaData: {
+                        ...annotated[index].mediaData,
+                        photoGroupId: groupId,
+                        photoGroupIndex: index - start,
+                        photoGroupCount: count,
+                        photoKind: "text_photo",
+                        useReferenceImage: multiImagePlan.useReferenceImage,
+                        multiImagePlan,
+                    },
+                };
+            }
+        }
+        start = end;
+    }
+
     return {
-        parts: cleaned,
+        parts: annotated,
         stateValues,
         freshStateValues: parsedSV.stateValues,
         statusPanel: restore(status.content),

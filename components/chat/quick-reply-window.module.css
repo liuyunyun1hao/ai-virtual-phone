@@ -1,0 +1,28 @@
+.overlay { position:absolute; inset:0; z-index:180; display:flex; align-items:flex-start; justify-content:center; padding:max(12px,var(--page-header-safe-top,32px)) 12px 12px; background:transparent; }
+.panel { width:min(100%,460px); height:46%; min-height:min(320px,100%); max-height:100%; display:flex; flex-direction:column; border-radius:26px; overflow:hidden; background:var(--c-panel,#fff); color:var(--c-text,#242428); border:1px solid #8883; box-shadow:0 8px 28px #0002; container-type:inline-size; }
+.toolbar { display:flex; align-items:center; gap:8px; padding:0 8px 0 16px; flex-shrink:0; background:var(--c-panel,#fff); }
+.toolbar button { min-width:44px; min-height:44px; display:flex; align-items:center; justify-content:center; color:inherit; background:transparent; border:0; border-radius:50%; cursor:pointer; }
+.toolbar button:active { opacity:.65; }
+.toolbar .title { flex:1; justify-content:flex-start; gap:8px; border-radius:12px; min-width:0; text-align:left; }
+.title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }
+.title svg { opacity:.55; flex-shrink:0; }
+.toolbar :focus-visible { outline:2px solid var(--c-icon-active,#3885ff); outline-offset:-2px; }
+.content { position:relative; flex:1; min-height:0; overflow:hidden; isolation:isolate; --page-header-safe-top:0px; --phone-titlebar-safe-top:0px; }
+.hint { padding:16px; font-size:13px; color:var(--c-icon); }
+
+/* Compact only the embedded room chrome; message and theme styles stay shared. */
+.content :global(.chat-room-wrapper[data-imessage-private]) {
+  --im26-edge:14px;
+  --im26-header-height:88px;
+  --im26-composer-bottom:8px;
+  --im26-composer-field-height:74px;
+  --chat-bottom-reserve:94px;
+}
+.content :global(.chat-room-wrapper[data-imessage-private] .page-header-safe-area) { height:0; }
+.content :global(.chat-room-wrapper[data-imessage-private] .imessage-private-header) { min-height:80px; }
+.content :global(.chat-room-wrapper[data-imessage-private] .imessage-contact-avatar) { width:44px; height:44px; }
+.content :global(.chat-room-wrapper[data-imessage-private] .imessage-contact-name) { margin-top:-3px; min-height:26px; padding:4px 10px; }
+.content :global(.chat-room-wrapper[data-imessage-private] .imessage-header-video svg) { width:38px; height:38px; }
+.content :global(.chat-room-wrapper[data-imessage-private] .imessage-composer-subject) { flex-basis:32px; height:32px; min-height:32px; padding-block:2px; }
+.content :global(.chat-room-wrapper[data-imessage-private] .imessage-composer-ai-reply) { top:2px; }
+

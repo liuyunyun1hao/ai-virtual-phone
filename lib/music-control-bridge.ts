@@ -2,7 +2,9 @@ import type { MusicTrack } from "./music-storage";
 import type { PlayMode } from "./music-context";
 
 export type MusicControlSnapshot = {
+    identityId?: string | null;
     currentTrack: MusicTrack | null;
+    selectedTrack?: MusicTrack | null; // UI metadata, even before an audio source is loaded.
     isPlaying: boolean;
     currentTime: number;
     duration: number;

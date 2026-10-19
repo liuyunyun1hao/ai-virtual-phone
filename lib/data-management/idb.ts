@@ -1,3 +1,6 @@
+import { backupAccess, type BackupAccess } from "./identity-backup";
+import { identityIndexedDbFactory, identityDatabaseName, logicalIdentityKey, physicalIdentityKey, assertIdentityActive } from "@/lib/identity-runtime";
+import { identityLocalStorage } from "@/lib/identity-runtime";
 import type {
   ClearResult,
   DataSource,
@@ -21,6 +24,8 @@ import {
   type MediaResolver,
 } from "./serializers";
 import { kvEntries, kvGet, kvRemove, kvSetAsync } from "../kv-db";
+import { updateIdentityDirectory } from "../identity-lifecycle";
+const IDENTITY_MANAGED_KEYS = new Set(["ai_phone_user_identities_v1", "float_identity_runtime_v1", "float_identity_character_access_v1", "float_identity_default_bindings_v1"]);
 
 type SourceStats = {
   records: number;
@@ -104,12 +109,7 @@ function tryMergeJsonArrayByKey(existingRaw: string, incomingRaw: string): strin
       changed = true;
       continue;
     }
-    const before = JSON.stringify(merged[existingIndex]);
-    const after = JSON.stringify(item);
-    if (before !== after) {
-      merged[existingIndex] = item;
-      changed = true;
-    }
+    // Same-ID records are preserved unless overwrite was explicitly requested.
   }
 
   return changed ? JSON.stringify(merged) : null;
@@ -141,7 +141,7 @@ function tryReplaceEmptyJsonValue(existingRaw: string, incomingRaw: string): str
 export function deleteDatabase(dbName: string): Promise<void> {
   return new Promise((resolve) => {
     if (!hasIndexedDb()) return resolve();
-    const request = indexedDB.deleteDatabase(dbName);
+    const request = indexedDB.deleteDatabase(identityDatabaseName(dbName));
     request.onsuccess = () => resolve();
     request.onerror = () => resolve();
     request.onblocked = () => resolve();
@@ -153,10 +153,14 @@ async function openDb(
   version?: number,
   upgrade?: (db: IDBDatabase, tx: IDBTransaction | null) => void,
   opts: { blockedGraceMs?: number; deadlineMs?: number } = {},
+  access?: BackupAccess,
 ): Promise<IDBDatabase | null> {
   if (!hasIndexedDb()) return null;
   return new Promise((resolve) => {
-    const request = version ? indexedDB.open(dbName, version) : indexedDB.open(dbName);
+    access?.guard();
+    const factory = access ? indexedDB : identityIndexedDbFactory();
+    const name = access ? (dbName === "AiPhoneKvDB" ? dbName : access.databaseName(dbName)) : identityDatabaseName(dbName);
+    const request = factory.open(name, version);
     let settled = false;
     let blockedTimer: ReturnType<typeof setTimeout> | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -176,8 +180,13 @@ async function openDb(
     if (opts.deadlineMs && opts.deadlineMs > 0) {
       deadlineTimer = setTimeout(() => settle(null), opts.deadlineMs);
     }
-    request.onupgradeneeded = () => upgrade?.(request.result, request.transaction);
-    request.onsuccess = () => settle(request.result);
+    request.onupgradeneeded = () => {
+      try { access?.guard(); upgrade?.(request.result, request.transaction); } catch { request.transaction?.abort(); }
+    };
+    request.onsuccess = () => {
+      try { access?.guard(); request.result.onversionchange = () => request.result.close(); settle(request.result); }
+      catch { request.result.close(); settle(null); }
+    };
     request.onerror = () => settle(null);
     // blocked ≠ 失败：持有旧连接的页面随时可能松手（Dexie 等库收到 versionchange
     // 会自动关闭），之后 success 照常触发。立刻放弃会让「应用自己开着库」这种
@@ -225,8 +234,13 @@ async function exportIndexedDbSource(
   source: IndexedDbSource,
   collector?: MediaCollector,
   excludeMedia = false,
+  access?: BackupAccess,
 ): Promise<IndexedDbSourceBackup> {
-  const db = await openDb(source.dbName);
+  if (access && typeof indexedDB.databases === "function") {
+    const names = await indexedDB.databases();
+    if (!names.some(db => db.name === access.databaseName(source.dbName))) return { type: "indexeddb", dbName: source.dbName, stores: [] };
+  }
+  const db = await openDb(source.dbName, undefined, undefined, { deadlineMs: 15000 }, access);
   if (!db) {
     // 打不开 ≠ 没数据：无版本 open 对不存在的库会新建空库并成功返回，
     // 走到这里说明是真报错（被浏览器清除中/损坏/被占用）。必须带出错误，
@@ -263,7 +277,11 @@ async function exportIndexedDbSource(
             resolve();
             return;
           }
-          rawRecords.push({ key: cursor.primaryKey, value: cursor.value });
+          const value = cursor.value;
+          // Explicitly owned private theme assets must not leak into another user's export.
+          if (!(source.dbName === "ai_phone_theme_db_v1" && ["chat_bg", "vn_scene", "vn_sprite"].includes(value?.type) && access?.userIds && value?.ownerUserId && !access.userIds.includes(value.ownerUserId))) {
+            rawRecords.push({ key: cursor.primaryKey, value });
+          }
           cursor.continue();
         };
         request.onerror = () => reject(request.error);
@@ -296,48 +314,53 @@ async function exportIndexedDbSource(
   }
 }
 
-async function readKvRecords(source: KvSource): Promise<{ key: string; value: string }[]> {
-  // 读不到真实存储时必须失败，绝不静默退回内存缓存：KV 水合失败时缓存可能是
-  // 空的/不完整的，退回缓存会生成一份「导出成功」但缺数据的备份——用户换设备
-  // 导入后才发现历史没了。宁可备份报错，也不产出表面正常的残缺 ZIP。
+async function readKvRecords(source: KvSource, access?: BackupAccess): Promise<{ key: string; value: string }[]> {
   const byKey = new Map<string, { key: string; value: string }>();
-  const db = await openDb("AiPhoneKvDB");
-  if (!db) {
-    throw new Error("本机数据库（AiPhoneKvDB）打不开，为避免生成不完整的备份已中止。请重启浏览器后重试。");
-  }
-  try {
-    // 库刚建、还没有 entries 表 = 这台设备确实没写过 KV 数据，不算读取失败
-    if (Array.from(db.objectStoreNames).includes("entries")) {
+  const db = await openDb("AiPhoneKvDB", undefined, undefined, { deadlineMs: 15000 }, access);
+  if (db && Array.from(db.objectStoreNames).includes("entries")) {
+    try {
       const transaction = db.transaction("entries", "readonly");
-      const request = transaction.objectStore("entries").openCursor();
+      const store = transaction.objectStore("entries");
+      // Inspect keys first: exporting A must not repeatedly clone B's large album JSON.
+      const request = store.openKeyCursor();
       await new Promise<void>((resolve, reject) => {
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) return resolve();
-          const record = cursor.value as { key: string; value: string };
-          if (matchesKey(record.key, source)) byKey.set(record.key, record);
-          cursor.continue();
+          const physical = String(cursor.primaryKey);
+          const logical = access ? access.logicalKey(physical) : logicalIdentityKey(physical);
+          if (logical === null || !matchesKey(logical, source)) { cursor.continue(); return; }
+          const read = store.get(cursor.primaryKey);
+          read.onsuccess = () => {
+            const record = read.result as { value: string };
+            byKey.set(logical, { key: logical, value: record.value });
+            cursor.continue();
+          };
+          read.onerror = () => reject(read.error);
         };
         request.onerror = () => reject(request.error);
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });
+    } catch (error) {
+      if (access) throw error;
+      // Fall back to cache-only below.
+    } finally {
+      db.close();
     }
-  } catch (error) {
-    throw new Error(`本机数据读取失败，为避免生成不完整的备份已中止（${error instanceof Error ? error.message : String(error)}）。请重试。`);
-  } finally {
-    db.close();
   }
 
-  // 内存缓存仍然要并进来：kvSet 是先写缓存再异步落盘，缓存可能比 IndexedDB 新
-  for (const record of kvEntries()) {
-    if (matchesKey(record.key, source)) byKey.set(record.key, record);
+  if (access && !db) throw new Error("无法读取键值数据库，已停止备份");
+  if (!access || access.isCurrent) for (const record of kvEntries()) {
+    if ((!access || access.accepts(record.key)) && matchesKey(record.key, source)) byKey.set(record.key, record);
   }
+  if (db && !Array.from(db.objectStoreNames).includes("entries")) db.close();
   return Array.from(byKey.values()).sort((a, b) => a.key.localeCompare(b.key));
 }
 
-async function exportKvSource(source: KvSource, collector?: MediaCollector): Promise<KvSourceBackup> {
-  const records = await readKvRecords(source);
+async function exportKvSource(source: KvSource, collector?: MediaCollector, access?: BackupAccess): Promise<KvSourceBackup> {
+  const records = await readKvRecords(source, access);
+  if (access) for (const record of records) record.value = access.filterValue(record.key, record.value);
   if (!collector) return { type: "kv", records };
   for (let index = 0; index < records.length; index += 1) {
     records[index] = { ...records[index], value: await serializeStorageString(records[index].value, collector) };
@@ -345,22 +368,26 @@ async function exportKvSource(source: KvSource, collector?: MediaCollector): Pro
   return { type: "kv", records };
 }
 
-async function exportLocalStorageSource(source: LocalStorageSource, collector?: MediaCollector): Promise<LocalStorageSourceBackup> {
+async function exportLocalStorageSource(source: LocalStorageSource, collector?: MediaCollector, access?: BackupAccess): Promise<LocalStorageSourceBackup> {
   if (typeof window === "undefined") return { type: "localStorage", records: [] };
   const records: { key: string; value: string }[] = [];
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
+  const storage = access ? window.localStorage : identityLocalStorage;
+  for (let index = 0; index < storage.length; index += 1) {
+    const physical = storage.key(index);
+    const key = physical && (access ? access.logicalKey(physical) : physical);
     if (!key || !matchesKey(key, source)) continue;
-    const value = window.localStorage.getItem(key);
-    if (value !== null) records.push({ key, value: await serializeStorageString(value, collector) });
+    const value = storage.getItem(physical!);
+    if (value !== null) records.push({ key, value: await serializeStorageString(access ? access.filterValue(key, value) : value, collector) });
   }
   return { type: "localStorage", records };
 }
 
 export async function exportSource(source: DataSource, collector?: MediaCollector, excludeMedia = false): Promise<SourceBackup> {
-  if (source.type === "indexeddb") return exportIndexedDbSource(source, collector, excludeMedia);
-  if (source.type === "kv") return exportKvSource(source, collector);
-  return exportLocalStorageSource(source, collector);
+  const access = source.backupOwner ? backupAccess(source.backupOwner, source.backupLegacyOwnerId, source.backupUserIds) : undefined;
+  const payload = source.type === "indexeddb" ? await exportIndexedDbSource(source, collector, excludeMedia, access)
+    : source.type === "kv" ? await exportKvSource(source, collector, access) : await exportLocalStorageSource(source, collector, access);
+  access?.guard();
+  return access ? { ...payload, owner: access.owner } : payload;
 }
 
 export async function inspectSource(source: DataSource): Promise<SourceStats> {
@@ -456,8 +483,15 @@ function applySpecIndexes(store: IDBObjectStore, spec: StoreSpec): void {
 // the version the app opens it at (e.g. reading-db's 5 stores → v6 vs the app's v3),
 // which then failed with "lower version than existing". One bump caps the gap at +1
 // so the app's own open just upgrades over it.
-async function ensureStores(dbName: string, specs: StoreSpec[]): Promise<IDBDatabase | null> {
-  let db = await openDb(dbName);
+async function ensureStores(dbName: string, specs: StoreSpec[], access?: BackupAccess): Promise<IDBDatabase | null> {
+  let db = await openDb(dbName, undefined, fresh => {
+    for (const spec of specs) {
+      const store = spec.keyPath === null ? fresh.createObjectStore(spec.name, { autoIncrement: spec.autoIncrement })
+        : fresh.createObjectStore(spec.name, { keyPath: spec.keyPath, autoIncrement: spec.autoIncrement });
+      applySpecIndexes(store, spec);
+      ensureKnownStoreIndexes(dbName, store);
+    }
+  }, { deadlineMs: 15000 }, access);
   if (!db) return null;
   const existing = new Set(Array.from(db.objectStoreNames));
   const missing = specs.filter((s) => !existing.has(s.name));
@@ -506,12 +540,33 @@ async function ensureStores(dbName: string, specs: StoreSpec[]): Promise<IDBData
       applySpecIndexes(store, spec);
       ensureKnownStoreIndexes(dbName, store);
     }
-  }, { blockedGraceMs: 15_000 });
+  }, { blockedGraceMs: 15_000, deadlineMs: 18000 }, access);
   // 升级被占用/失败时退回无版本打开：能写进已存在的 store 就写，缺失的 store
   // 由导入侧逐个上报。整库直接放弃（旧行为）= 用户看到「恢复完成」但整块数据没了。
   // 这个回退 open 会排在仍然 blocked 的升级请求后面，必须带总体超时。
-  if (!db) db = await openDb(dbName, undefined, undefined, { deadlineMs: 3_000 });
+  if (!db) db = await openDb(dbName, undefined, undefined, { deadlineMs: 3_000 }, access);
   return db;
+}
+
+async function readScopedKv(key: string, access: BackupAccess): Promise<string | null> {
+  const db = await openDb("AiPhoneKvDB", undefined, undefined, { deadlineMs: 15000 }, access);
+  if (!db) throw new Error("无法打开键值数据库");
+  try {
+    if (!db.objectStoreNames.contains("entries")) return null;
+    const row = await runRequest(db.transaction("entries").objectStore("entries").get(access.physicalKey(key)));
+    return row?.value ?? null;
+  } finally { db.close(); }
+}
+async function writeScopedKv(key: string, value: string, access: BackupAccess): Promise<void> {
+  const db = await openDb("AiPhoneKvDB", undefined, undefined, { deadlineMs: 15000 }, access);
+  if (!db) throw new Error("无法打开键值数据库");
+  try {
+    const physical = access.physicalKey(key);
+    const tx = db.transaction("entries", "readwrite");
+    const done = transactionDone(tx);
+    tx.objectStore("entries").put({ key: physical, value });
+    await done;
+  } finally { db.close(); }
 }
 
 export async function importSource(
@@ -520,6 +575,7 @@ export async function importSource(
   resolver?: MediaResolver,
   onProgress?: (done: number, total: number) => void,
 ): Promise<{ added: number; skipped: number; overwritten: number; errors: string[] }> {
+  const access = payload.owner ? backupAccess(payload.owner) : undefined;
   const result = { added: 0, skipped: 0, overwritten: 0, errors: [] as string[] };
   const totalRecords = payload.type === "indexeddb"
     ? payload.stores.reduce((sum, store) => sum + store.records.length, 0)
@@ -534,13 +590,21 @@ export async function importSource(
     for (const record of payload.records) {
       // 单条失败（配额满、单条数据损坏）只损失这一条，剩下的照常导入。
       try {
-        const exists = window.localStorage.getItem(record.key) !== null;
+        if (record.key === "ai_phone_user_identities_v1") {
+          const imported = await importSource({ type: "kv", records: [record], owner: payload.owner }, overwrite, resolver);
+          result.added += imported.added; result.skipped += imported.skipped;
+          result.overwritten += imported.overwritten; result.errors.push(...imported.errors); continue;
+        }
+        const storage = access ? window.localStorage : identityLocalStorage;
+        const key = access ? access.physicalKey(record.key) : record.key;
+        const exists = storage.getItem(key) !== null;
         if (exists && !overwrite) {
           result.skipped += 1;
           continue;
         }
         const value = await deserializeStorageString(record.value, resolver);
-        window.localStorage.setItem(record.key, value);
+        access?.guard();
+        storage.setItem(key, value);
         if (exists) result.overwritten += 1;
         else result.added += 1;
       } catch (error) {
@@ -558,15 +622,40 @@ export async function importSource(
       // 静默丢弃——正是「恢复内容不全」的来源之一。
       try {
         const incoming = await deserializeStorageString(record.value, resolver);
-        const existing = kvGet(record.key);
+        const existing = access && !access.isCurrent ? await readScopedKv(record.key, access) : kvGet(record.key);
+        const put = (value: string) => access && !access.isCurrent ? writeScopedKv(record.key, value, access) : kvSetAsync(record.key, value);
+        access?.physicalKey(record.key);
+        if (record.key === "float_identity_character_access_v1") {
+          const current = JSON.parse(existing ?? "{}");
+          const incomingAccess = JSON.parse(incoming);
+          for (const [id, users] of Object.entries(incomingAccess)) {
+            if (!Array.isArray(users) || users.some(user => typeof user !== "string")) throw new Error("角色访问范围格式错误");
+            current[id] = [...new Set([...(current[id] ?? []), ...users])];
+          }
+          await put(JSON.stringify(current));
+          result.overwritten += 1; continue;
+        }
+        if (record.key === "ai_phone_user_identities_v1") {
+          const current = existing ? JSON.parse(existing) : [];
+          const incomingIdentities = JSON.parse(incoming);
+          if (!Array.isArray(incomingIdentities)) throw new Error("身份备份格式错误");
+          const identities = new Map<string, { id: string }>(current.map((identity: { id: string }) => [identity.id, identity]));
+          for (const identity of incomingIdentities) {
+            if (typeof identity?.id !== "string" || !identity.id) continue;
+            if (overwrite || !identities.has(identity.id)) identities.set(identity.id, identity);
+          }
+          const merged = [...identities.values()];
+          await kvSetAsync(record.key, JSON.stringify(merged)); updateIdentityDirectory(merged);
+          result.overwritten += 1; continue;
+        }
         const exists = existing !== null;
         if (!exists) {
-          await kvSetAsync(record.key, incoming);
+          await put(incoming);
           result.added += 1;
           continue;
         }
         if (overwrite) {
-          await kvSetAsync(record.key, incoming);
+          await put(incoming);
           result.overwritten += 1;
           continue;
         }
@@ -576,7 +665,7 @@ export async function importSource(
           result.skipped += 1;
           continue;
         }
-        await kvSetAsync(record.key, merged);
+        await put(merged);
         result.overwritten += 1;
       } catch (error) {
         result.errors.push(`kv.${record.key}: ${formatImportError(error)}`);
@@ -588,9 +677,11 @@ export async function importSource(
   }
 
   // Create every store the payload needs in ONE version bump, then write each.
+  if (payload.stores.length === 0) return result;
   const db = await ensureStores(
     payload.dbName,
     payload.stores.map((s) => ({ name: s.name, keyPath: s.keyPath, autoIncrement: s.autoIncrement, indexes: s.indexes })),
+    access,
   );
   if (!db) {
     result.errors.push(`无法打开 ${payload.dbName}`);
@@ -613,6 +704,7 @@ export async function importSource(
           const key = await deserializeValue(record.key);
           const value = await deserializeValue(record.value, resolver);
           const hasKey = key !== undefined && key !== null;
+          access?.guard();
           const transaction = db.transaction(storePayload.name, "readwrite");
           done = transactionDone(transaction);
           const store = transaction.objectStore(storePayload.name);
@@ -647,15 +739,17 @@ export async function importSource(
 
 export async function clearSource(source: DataSource): Promise<ClearResult> {
   const result: ClearResult = { removed: 0, errors: [] };
+  if (source.preserveOnClear) return result;
 
   if (source.type === "localStorage") {
     const keys: string[] = [];
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
+    for (let index = 0; index < identityLocalStorage.length; index += 1) {
+      const key = identityLocalStorage.key(index);
       if (key && matchesKey(key, source)) keys.push(key);
     }
     for (const key of keys) {
-      window.localStorage.removeItem(key);
+      if (IDENTITY_MANAGED_KEYS.has(key)) continue;
+      identityLocalStorage.removeItem(key);
       result.removed += 1;
     }
     return result;
@@ -670,7 +764,9 @@ export async function clearSource(source: DataSource): Promise<ClearResult> {
       const transaction = db.transaction("entries", "readwrite");
       const store = transaction.objectStore("entries");
       for (const record of records) {
-        store.delete(record.key);
+        if (IDENTITY_MANAGED_KEYS.has(record.key)) continue;
+        assertIdentityActive();
+        store.delete(physicalIdentityKey(record.key));
         removedKeys.push(record.key);
         result.removed += 1;
       }

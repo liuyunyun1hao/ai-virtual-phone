@@ -8,7 +8,11 @@ import {
     dbReplaceContacts, dbReplaceSessions,
 } from "./chat-db";
 import { resolveUserIdentity } from "./settings-storage";
-import { loadCharacters } from "./character-storage";
+import { assertCharacterIdentityAccess } from "./identity-access";
+import { captureMusicListeningContext } from "./music-listening-capture";
+import type { MusicListeningContext } from "./music-listening";
+import { assertIdentityActive, getCurrentIdentityId } from "./identity-runtime";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
 import { parseAIResponse } from "./rich-message-parser";
@@ -18,21 +22,6 @@ export const DEFAULT_VISION_IMAGE_PROMPT_LIMIT = 1;
 export const MAX_VISION_IMAGE_PROMPT_LIMIT = 20;
 export const CHAT_INITIAL_VISIBLE_MESSAGE_COUNT = 50;
 export const CHAT_LOAD_MORE_MESSAGE_COUNT = 30;
-
-/**
- * 单会话上下文 token 预算（默认上限）。真实上限取决于所用模型的上下文窗口，
- * 这里给一个保守的默认「提醒阈值」，用户可在会话内调整。超过此值会在聊天室头部提示开新窗口。
- */
-export const DEFAULT_SESSION_CONTEXT_TOKEN_BUDGET = 16000;
-/** 上下文预算可调范围（尽量小，避免把模型上下文彻底撑爆） */
-export const MIN_SESSION_CONTEXT_TOKEN_BUDGET = 2000;
-export const MAX_SESSION_CONTEXT_TOKEN_BUDGET = 200000;
-export function normalizeContextTokenBudget(value: unknown): number {
-    if (value === undefined || value === null || value === "") return DEFAULT_SESSION_CONTEXT_TOKEN_BUDGET;
-    const parsed = typeof value === "number" ? value : Number(value);
-    if (!Number.isFinite(parsed)) return DEFAULT_SESSION_CONTEXT_TOKEN_BUDGET;
-    return Math.max(MIN_SESSION_CONTEXT_TOKEN_BUDGET, Math.min(MAX_SESSION_CONTEXT_TOKEN_BUDGET, Math.floor(parsed)));
-}
 
 export function normalizeVisionImagePromptLimit(value: unknown): number {
     if (value === undefined || value === null || value === "") return DEFAULT_VISION_IMAGE_PROMPT_LIMIT;
@@ -49,14 +38,24 @@ export type ChatContact = {
 };
 
 export type ChatSession = {
+    bubbleColors?: import("./chat-bubble-colors").BubbleColors;
+    /** Character avatars as shown inside this chat app only. Character profiles keep their own avatar. */
+    characterAvatars?: Record<string, string | null>;
+    /** Per-chat avatar memory used by autonomous avatar changes and "change back". */
+    characterAvatarHistories?: Record<string, import("./character-types").CharacterAvatarHistoryEntry[]>;
     id: string;
     contactId: string;
     lastMessageId?: string;
     lastMessagePreview?: string;
     unreadCount: number;
+    unreadMessageIds?: string[];
     updatedAt: string; // ISO date
     isPinned: boolean;
     backgroundImage?: string; // Add support for custom background
+    /** Opt-in glass treatment for message bubbles; absent/false keeps the classic iMessage style. */
+    glassBubblesEnabled?: boolean;
+    /** Per-chat beauty preset; absent preserves the legacy glass switch. */
+    beautyPreset?: import("./chat-beauty-preset").ChatBeautyPreset;
     autoReplied?: boolean; // Whether the initial greeting auto-reply has been triggered
     alias?: string;
     videoBackground?: string;
@@ -76,14 +75,12 @@ export type ChatSession = {
     streamOnline?: boolean;
     /** 流式生成（线下）：开启后该会话的线下 AI 回复边生成边显示（默认关，保持原整段请求行为） */
     streamOffline?: boolean;
-    /**
-     * 线下摘要自动补提：模型没写 <summary> 时再发一次小请求让它补。默认开；
-     * 关掉就只调一次 API，那一轮没摘要（不进短期记忆的事件流）。按次计费的接口想省一半调用时关它。
-     */
-    offlineSummaryRetry?: boolean;
     // Group chat fields
     isGroup?: boolean;
     groupName?: string;
+    groupAvatar?: string;
+    groupDescription?: string; // 幕后群说明：仅供模型引导，不是群公告或角色发言
+    pendingGroupDirectorNote?: { id: string; text: string }; // 下一轮幕后指引，绝不写入消息历史
     participantIds?: string[]; // characterId array
     groupVideoBackgrounds?: Record<string, string>; // characterId|"self" → image ID
     // Group admin fields ("self" = the user)
@@ -92,28 +89,52 @@ export type ChatSession = {
     groupMutes?: Record<string, string>; // (characterId | "self") → mute expiry ISO
     allowAdminActionsOnUser?: boolean; // characters may kick/mute the user (default off)
     isSpectator?: boolean; // 围观群：用户不在群内，只能生成/线下
-    // ── 多会话（同联系人下多个对话线程）支持 ──
-    /** 会话标题（用户可见）。为空 = 传统「一个联系人一个会话」的旧会话，列表里显示角色名 */
-    title?: string;
-    /** 压缩总结后开的新窗口：指向被总结的父会话 */
-    parentSessionId?: string;
-    /** 同一对话链的根会话（第一条），用于「查看整条对话链」 */
-    rootSessionId?: string;
-    /** 单会话上下文 token 预算（提醒阈值），见 DEFAULT_SESSION_CONTEXT_TOKEN_BUDGET */
-    contextTokenBudget?: number;
-    /** 本会话是由哪个父会话压缩而来时，存下的压缩摘要原文（仅供参考，真正的上下文已作为 system 消息写入新会话） */
-    compressedSummary?: string;
-    /** 本会话创建时间（ISO）。旧会话可能缺失，回落到 updatedAt */
-    createdAt?: string;
 };
-
-/** 该会话是否属于「用户主动拆出的独立对话线程」（不应被重复会话合并逻辑吞掉） */
-export function isExplicitlySeparateSession(session: ChatSession | null | undefined): boolean {
-    return Boolean(session && (session.title || session.parentSessionId));
-}
 
 export type ChatMessageStatus = "sending" | "sent" | "read" | "failed";
 export type ChatMessageRole = "user" | "assistant" | "system" | "tool";
+
+export type ChatPhotoAnnotation = {
+    id: string;
+    kind: "stroke" | "text" | "rough_shape" | "emoji";
+    color: string;
+    width?: number;
+    /** 0..1 normalized coordinates stored as x/y pairs. */
+    points?: number[];
+    x?: number;
+    y?: number;
+    text?: string;
+    shape?: "heart" | "star" | "circle" | "arrow" | "box" | "underline";
+    doodlePath?: string;
+    fill?: string;
+    opacity?: number;
+    compositionId?: string;
+    emoji?: string;
+    scale?: number;
+    rotation?: number;
+    seed?: number;
+    roughness?: number;
+    bowing?: number;
+    size?: number;
+    /** Optional human/model description of what this mark represents. */
+    description?: string;
+    actorId?: string;
+    actorName?: string;
+    createdAt?: string;
+    /** AI/vector marks use an intentionally imperfect double-stroked rendering. */
+    renderStyle?: "handdrawn";
+};
+
+export type ChatPhotoGroupItem = {
+    messageId: string;
+    tapback?: string;
+    tapbackBy?: "user" | "assistant";
+    tapbacks?: { actorId: string; actorName: string; emoji: string }[];
+    mediaUrl?: string;
+    label?: string;
+    photoKind?: "photo" | "text_photo";
+    annotations?: ChatPhotoAnnotation[];
+};
 
 export type StateValue = { name: string; value: number };
 export type NativeToolCallRecord = { id: string; name: string; args: Record<string, unknown>; thoughtSignature?: string };
@@ -124,6 +145,7 @@ export type ChatMessage = {
     sessionId: string;
     role: ChatMessageRole;
     content: string;
+    listeningContext?: MusicListeningContext | null;
     status: ChatMessageStatus;
     createdAt: string; // ISO date
     order?: number; // Stable per-session display order
@@ -136,10 +158,16 @@ export type ChatMessage = {
     mediaType?: "image" | "audio" | "video"
         | "red_packet" | "transfer" | "location"
         | "poke" | "sticker" | "quote" | "dice"
+        | "tapback_action"
+        | "avatar_action"
+        | "photo_markup_action"
+        | "chat_background_change"
+        | "private_alias_action"
+        | "group_name_action"
         | "voice_call" | "video_call"
         | "accept_red_packet" | "decline_red_packet" | "accept_transfer" | "decline_transfer"
         | "payment_request" | "accept_payment_request" | "decline_payment_request"
-        | "music" | "music_share" | "music_notify" | "music_not_found"
+        | "listening_invite" | "music" | "music_share" | "music_notify" | "music_not_found"
         | "xiaohongshu_note_share"
         | "gift"
         | "contact_card"
@@ -156,13 +184,80 @@ export type ChatMessage = {
     origin?: "chat" | "reading_discuss" | "custom_app" | "custom_app_background";
     mediaUrl?: string;
     mediaData?: {
+        listeningInvite?: { roomId: string; initiator?: "user" | "character"; response?: "accepted" | "declined"; title?: string; artist?: string; coverUrl?: string };
+        screenEffect?: "echo" | "love" | "fireworks";
+        screenEffectScene?: { imageRef:string; effect:"echo"|"love"|"fireworks"; phase:number; capturedAt:string; partial:boolean };
+        mentions?: { characterId: string; name: string }[];
         amount?: number;          // 红包/转账金额
+        currency?: string;        // 转账原币种，如 USD/EUR/GBP/JPY/CNY
+        exchangeRateToCny?: number; // 发送/领取时固定的联网参考汇率
+        cnyAmount?: number;       // 已固定的人民币折算金额
+        exchangeRateAt?: string;
+        receivedCurrency?: string;
+        receivedAmount?: number;
+        exchangeRate?: number;
         count?: number;           // 红包个数
         label?: string;           // 红包留言/转账备注/照片描述/位置名/表情名
+        photoGroupId?: string;    // 同一次发送的照片组 ID
+        photoGroupIndex?: number; // 组内 0-based 顺序
+        photoGroupCount?: number; // 组内照片总数
+        /** 组内当前作为封面/首图的 0-based index；左右滑动后持久化。 */
+        photoGroupActiveIndex?: number;
+        photoGroupLeadMessageId?: string;
+        photoGroupLeadLabel?: string;
+        photoKind?: "photo" | "text_photo";
+        /** Independent drawing board archive; photo markup does not use this. */
+        drawingProcess?: import("./chat-drawing").DrawingSnapshot;
+        /** One structured multi-photo intent, generated as a single contact sheet. */
+        multiImagePlan?: {
+            displayImageCount: 2 | 4 | 6 | 9;
+            visualIntent: string;
+            shots: string[];
+            characterExpressionStyle: "infer_from_context" | "expressive" | "subtle";
+            useReferenceImage: boolean;
+        };
+        photoAnnotations?: ChatPhotoAnnotation[];
+        /** Stable provenance for a photo forwarded from the album; not access permission. */
+        albumPhotoId?: string;
+        albumContentVersion?: string;
+        albumVariantVersion?: string;
+        photoMarkText?: string;
+        photoMarkStrokes?: ChatPhotoAnnotation[];
+        photoMarkKind?: "handdrawn" | "emoji";
+        photoMarkEmoji?: string;
+        photoMarkScale?: number;
+        photoMarkRotation?: number;
+        photoMarkX?: number;
+        photoMarkY?: number;
+        photoMarkTargetIndex?: number;
+        photoMarkupTargetMessageId?: string;
+        photoMarkupTargetGroupId?: string;
+        photoMarkupActorId?: string;
+        photoMarkupActorName?: string;
+        photoMarkupSummary?: string;
+        photoMarkupTargetLabel?: string;
+        photoMarkupTargetGroupCount?: number;
+        photoMarkupTargetPhotoKind?: "photo" | "text_photo";
+        chatRenameKind?: "private_alias" | "group_name";
+        chatRenameValue?: string;
+        chatRenameActorId?: string;
+        chatRenameActorName?: string;
+        /** UI projection: sibling messages collected onto the first photo bubble. */
+        photoGroupItems?: ChatPhotoGroupItem[];
         status?: "pending" | "opened" | "received" | "declined" | "paid" | "canceled";  // 红包/转账/代付状态
         quoteMessageId?: string;  // 引用消息 ID
         quotePreview?: string;    // 引用消息预览文本
         quoteRole?: ChatMessageRole; // 引用消息的 role
+        quotePhotoMessageId?: string;
+        quotePhotoLabel?: string;
+        quotePhotoGroupIndex?: number;
+        quotePhotoGroupCount?: number;
+        quotePhotoAnnotations?: ChatPhotoAnnotation[];
+        /** Unicode emoji; rendered with the device's native emoji font. */
+        tapback?: string;
+        avatarImageId?: string;
+        tapbackBy?: "user" | "assistant";
+        tapbacks?: Array<{ actorId: string; actorName: string; emoji: string }>;
         stickerUrl?: string;      // 表情包图片路径
         diceFace?: number;        // 骰子点数（1-6），气泡翻滚后定格并与全屏动效一致
         pokeSender?: string;      // 拍一拍发起人名字
@@ -173,7 +268,11 @@ export type ChatMessage = {
         recipientName?: string;   // 转账收款人显示名
         claimedBy?: string[];     // 群红包已领取人名列表
         claimedAmounts?: Record<string, number>; // 拼手气红包：每人领取金额
+        claimedByUserIds?: string[];
+        claimedAmountsByUserId?: Record<string, number>;
         walletTransactionId?: string; // 发送红包/转账时扣款流水
+        walletDebitAmount?: number;
+        walletDebitCurrency?: string;
         walletRefundTransactionId?: string; // 被拒收/退回时退款流水
         walletDepositTransactionId?: string; // 领取红包/转账时入账流水
         shoppingGiftId?: string; // 购物订单中的可送礼物实例 ID
@@ -220,6 +319,9 @@ export type ChatMessage = {
         adminMuteMinutes?: number;// 禁言时长（分钟）
         musicTitle?: string;      // 音乐标题
         musicArtist?: string;     // 音乐歌手
+        musicCoverUrl?: string;   // Preserve the selected album art for lyric shares.
+        musicTrack?: import("./music-storage").MusicTrack; // Fixed recording; never persist an expiring play URL.
+        musicResolution?: "pending" | "resolved" | "unresolved";
         xiaohongshuAuthor?: string;       // 小红书分享作者
         xiaohongshuTitle?: string;        // 小红书分享标题
         xiaohongshuBody?: string;         // 小红书分享正文
@@ -231,6 +333,7 @@ export type ChatMessage = {
         xiaohongshuTone?: string;
         callDuration?: string;    // 通话时长（如 05:23）
         voiceDuration?: number;   // 语音条时长（秒）
+        speechText?: string; // Role-authored speech directions, separate from the visible transcript.
         synthesizedFromText?: string; // 语音条当前音频对应的合成文本
         memoryContent?: string;   // 记忆写入内容
         memoryReason?: string;    // 记忆写入原因
@@ -243,7 +346,7 @@ export type ChatMessage = {
         imageGenerationMediaRef?: string;
         imageGenerationPrompt?: string;
         imageGenerationUsedReference?: boolean;
-        imageGenerationStatus?: "pending" | "failed" | "generated";
+        imageGenerationStatus?: "pending" | "failed" | "generated" | "fallback";
         imageGenerationError?: string;
         mediaCompressedAt?: string;
         mediaCleanedAt?: string;
@@ -302,7 +405,6 @@ export type ChatAppSettings = {
     enterToSendEnabled?: boolean; // When true, Enter sends chat input and Shift+Enter inserts a newline
     callVibrationEnabled?: boolean; // 语音/视频来电等待接听时循环振动（默认开；iOS 网页不支持振动则无效果）
     maxToolRounds?: number; // 单条消息的工具循环轮数上限（默认 5；每轮=一次模型请求，轮内调用条数不限）
-    floatingDockEnabled?: boolean; // 悬浮球贴边半隐藏收拢模式（默认关）
 };
 
 /** 单条消息工具循环轮数上限（默认 5，夹在 1–20 之间） */
@@ -335,6 +437,7 @@ const MEDIA_PREVIEW_MAP: Record<string, string> = {
     payment_request: "[代付请求]",
     music: "[音乐]",
     music_share: "[音乐分享]",
+    listening_invite: "[一起听邀请]",
     xiaohongshu_note_share: "[小红书分享]",
     app_card: "[应用卡片]",
     tool_notice: "[执行动作]",
@@ -353,8 +456,11 @@ export function isSystemInstructionMessage(msg: Pick<ChatMessage, "role" | "medi
 export function getChatMessagePreview(msg: ChatMessage): string {
     if (isReadingDiscussMessage(msg)) return "";
 
-    const userName = (() => { try { return resolveUserIdentity()?.name; } catch { return undefined; } })();
-    const toYou = (text: string) => userName ? text.replace(new RegExp(userName, "g"), "你") : text;
+    const getUserName = () => { try { return resolveUserIdentity()?.name; } catch { return undefined; } };
+    const toYou = (text: string) => {
+        const userName = getUserName();
+        return userName ? text.replace(new RegExp(userName, "g"), "你") : text;
+    };
 
     // Retracted: "你/对方撤回了一条消息"
     if (msg.isRetracted) return (msg.role === "user" ? "你" : "对方") + "撤回了一条消息";
@@ -406,6 +512,7 @@ export function getChatMessagePreview(msg: ChatMessage): string {
 
     // Poke: "你 拍了拍 XX" / "XX 拍了拍 你" (no brackets, user name → "你")
     if (msg.mediaType === "poke") {
+        const userName = getUserName();
         const sender = msg.mediaData?.pokeSender || (msg.role === "user" ? "你" : "对方");
         const target = msg.mediaData?.pokeTarget || (msg.role === "user" ? "对方" : "你");
         const dSender = (userName && sender === userName) ? "你" : sender;
@@ -436,6 +543,7 @@ export function getChatMessagePreview(msg: ChatMessage): string {
         // Call initiation: [我向XX发起了语音通话] → 你/对方发起了语音通话
         const initiate = c.match(/\[我向(.+?)发起了((?:语音|视频)通话)\]/);
         if (initiate) {
+            const userName = getUserName();
             const target = initiate[1];
             if (userName && target === userName) return `对方发起了${initiate[2]}`;
             return `你发起了${initiate[2]}`;
@@ -584,7 +692,6 @@ const DEFAULT_CHAT_APP_SETTINGS: ChatAppSettings = {
     promptViewerEnabled: false,
     quickActionEnabled: false,
     enterToSendEnabled: false,
-    floatingDockEnabled: false,
 };
 
 // ── In-Memory Caches (hydrated from IndexedDB on startup) ──────────
@@ -693,13 +800,6 @@ function normalizeChatSessions(sessions: ChatSession[]): NormalizedSessionList {
         const session = byId.get(id);
         if (!session) continue;
         if (session.isGroup) {
-            normalized.push(session);
-            continue;
-        }
-
-        // 用户主动拆出的独立对话线程（带标题 / 由压缩衍生）各自占一行，
-        // 不再按 contactId 合并，否则「一个联系人多个会话」的能力就废了。
-        if (isExplicitlySeparateSession(session)) {
             normalized.push(session);
             continue;
         }
@@ -1051,6 +1151,7 @@ export function saveChatContacts(contacts: ChatContact[]) {
 }
 
 export function addChatContact(characterId: string): ChatContact | null {
+    assertCharacterIdentityAccess(characterId);
     // 任何一条"重新加上好友"的路径都会走到这里（通过好友申请、搜索添加、
     // 后台引擎重新建联系），统一在这里解除删除状态，不会漏。
     unmarkContactRemoved(characterId);
@@ -1073,6 +1174,12 @@ export function removeChatContact(characterId: string) {
 }
 
 // ── CRUD for Sessions ─────────────────────────
+/** Read current session metadata without scanning messages or refreshing previews.
+ * Treat the returned snapshot as read-only; hydration/imports replace the live cache. */
+export function getChatSessionMetadata(): readonly ChatSession[] {
+    return _sessionsCache;
+}
+
 export function loadChatSessions(): ChatSession[] {
     const normalized = normalizeChatSessions(_sessionsCache);
     const redirectedMessages = redirectMessagesToPreferredSessions(normalized.redirects);
@@ -1098,7 +1205,25 @@ export function saveChatSessions(sessions: ChatSession[]) {
     else dbPutSessions(refreshed.items);
 }
 
+export const CHAT_UNREAD_UPDATED_EVENT = "chat-unread-updated";
+
+export function isUnreadChatMessage(message: ChatMessage): boolean {
+    return message.role === "assistant" && !message.isRetracted
+        && !["tool_call", "tool_result", "tool_notice", "memory_write_request", "tapback_action", "poke", "voice_call", "video_call", "system_instruction", "group_admin_notice", "accept_red_packet", "decline_red_packet", "accept_transfer", "decline_transfer", "accept_payment_request", "decline_payment_request"].includes(message.mediaType || "")
+        && Boolean(message.content.trim() || message.mediaType);
+}
+
+export function markChatSessionRead(sessionId: string): void {
+    const session = _sessionsCache.find(item => item.id === sessionId);
+    if (!session || (!session.unreadCount && !session.unreadMessageIds?.length)) return;
+    session.unreadCount = 0;
+    session.unreadMessageIds = [];
+    dbPutSessions([session]);
+    if (typeof window !== "undefined") window.dispatchEvent(new Event(CHAT_UNREAD_UPDATED_EVENT));
+}
+
 export function createOrGetSession(contactId: string): ChatSession {
+    assertCharacterIdentityAccess(contactId);
     const sessions = loadChatSessions();
     const existing = sessions.find(s => s.contactId === contactId);
     if (existing) return existing;
@@ -1117,85 +1242,9 @@ export function createOrGetSession(contactId: string): ChatSession {
     return newSession;
 }
 
-export type CreateChatSessionOptions = {
-    /** 会话标题（用户可见）。带标题的会话会被视为独立对话线程，不与旧会话合并 */
-    title?: string;
-    /** 压缩总结后开的新窗口：指向被总结的父会话 */
-    parentSessionId?: string;
-    /** 对话链根会话；不传则默认等于新会话自身 id */
-    rootSessionId?: string;
-    /** 上下文 token 预算（提醒阈值）；不传用默认值 */
-    contextTokenBudget?: number;
-    /** 群聊参数（沿用 createGroupSession 语义） */
-    isGroup?: boolean;
-    groupName?: string;
-    participantIds?: string[];
-    isSpectator?: boolean;
-};
-
-/**
- * 始终新建一个会话（不复用旧的）。用于在同一个联系人下拆出多条对话线程，
- * 或「压缩总结后开新窗口」。返回的新会话已写入缓存与 IndexedDB。
- */
-export function createChatSession(contactId: string, options?: CreateChatSessionOptions): ChatSession {
-    const sessions = loadChatSessions();
-    const now = new Date().toISOString();
-    const id = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const newSession: ChatSession = {
-        id,
-        contactId,
-        unreadCount: 0,
-        updatedAt: now,
-        createdAt: now,
-        isPinned: false,
-        bilingualTranslationEnabled: true,
-        collapseBilingualTranslation: true,
-        visionImagePromptLimit: DEFAULT_VISION_IMAGE_PROMPT_LIMIT,
-        ...(options?.title ? { title: options.title } : {}),
-        ...(options?.parentSessionId ? { parentSessionId: options.parentSessionId } : {}),
-        ...(options?.rootSessionId ? { rootSessionId: options.rootSessionId } : { rootSessionId: id }),
-        contextTokenBudget: normalizeContextTokenBudget(options?.contextTokenBudget),
-        ...(options?.isGroup
-            ? {
-                isGroup: true,
-                groupName: options.groupName,
-                participantIds: options.participantIds,
-                groupOwnerId: options.isSpectator ? options.participantIds?.[0] : "self",
-                ...(options.isSpectator ? { isSpectator: true } : {}),
-            }
-            : {}),
-    };
-    saveChatSessions([newSession, ...sessions]);
-    return newSession;
-}
-
-/** 列出某个联系人下的所有会话（含传统单会话与用户拆出的独立对话线程），按创建时间升序 */
-export function getSessionsForContact(contactId: string): ChatSession[] {
-    return loadChatSessions()
-        .filter(s => s.contactId === contactId)
-        .sort((a, b) => parseIsoTime(a.createdAt || a.updatedAt) - parseIsoTime(b.createdAt || b.updatedAt));
-}
-
-/** 通用：对指定会话打补丁并落库（重命名 / 改预算等都走这里） */
-export function updateChatSession(sessionId: string, patch: Partial<ChatSession>): ChatSession | null {
-    const sessions = loadChatSessions();
-    const idx = sessions.findIndex(s => s.id === sessionId);
-    if (idx === -1) return null;
-    const updated: ChatSession = { ...sessions[idx], ...patch, id: sessions[idx].id, contactId: sessions[idx].contactId };
-    sessions[idx] = updated;
-    saveChatSessions(sessions);
-    return updated;
-}
-
-export function renameChatSession(sessionId: string, title: string): ChatSession | null {
-    return updateChatSession(sessionId, { title: title.trim() || undefined });
-}
-
-export function setSessionContextTokenBudget(sessionId: string, budget: number): ChatSession | null {
-    return updateChatSession(sessionId, { contextTokenBudget: normalizeContextTokenBudget(budget) });
-}
-
-export function createGroupSession(groupName: string, participantIds: string[], options?: { isSpectator?: boolean }): ChatSession {
+export function createGroupSession(groupName: string, participantIds: string[], options?: { isSpectator?: boolean; groupAvatar?: string; groupDescription?: string }): ChatSession {
+    assertIdentityActive();
+    participantIds.forEach(assertCharacterIdentityAccess);
     const sessions = loadChatSessions();
     const isSpectator = options?.isSpectator === true;
     const newSession: ChatSession = {
@@ -1209,6 +1258,8 @@ export function createGroupSession(groupName: string, participantIds: string[], 
         visionImagePromptLimit: DEFAULT_VISION_IMAGE_PROMPT_LIMIT,
         isGroup: true,
         groupName,
+        groupAvatar: options?.groupAvatar,
+        ...(options?.groupDescription?.trim() ? { groupDescription: options.groupDescription.trim().slice(0, 4000) } : {}),
         participantIds,
         // 围观群用户不在群内，群主落在第一位成员头上
         groupOwnerId: isSpectator ? participantIds[0] : "self",
@@ -1270,19 +1321,32 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     status?: ChatMessageStatus;
     createdAt?: string;
 }): ChatMessage {
+    assertIdentityActive();
+    if (msg.senderCharacterId) assertCharacterIdentityAccess(msg.senderCharacterId);
+    const listeningContext = msg.listeningContext !== undefined
+        ? msg.listeningContext?.identityId === getCurrentIdentityId() ? msg.listeningContext : null
+        : msg.role === "user" && (!msg.origin || msg.origin === "chat") && msg.content.trim() && (!msg.mediaType || msg.mediaType === "quote")
+            ? captureMusicListeningContext(msg.createdAt) : undefined;
     let newMsg: ChatMessage = {
         ...msg,
+        listeningContext,
         id: createMessageId(),
         createdAt: msg.createdAt || new Date().toISOString(),
         order: getNextMessageOrder(msg.sessionId),
         status: msg.status || "sent"
     };
+    const anchoredContext = listeningContext ? {
+        ...listeningContext, lines: listeningContext.lines.map(line => ({ ...line })),
+        ...(listeningContext.reference ? { reference: { ...listeningContext.reference } } : {}),
+    } : listeningContext;
 
     // 聊天插件织入点：消息落库前同步改写（全部消息路径都会经过这里）
     const pluginResult = runChatPluginTransformSync("message.beforePersist", { message: newMsg });
     if (pluginResult.message && typeof pluginResult.message === "object" && pluginResult.message.id === newMsg.id) {
         newMsg = pluginResult.message;
     }
+    // Text transforms do not move or remove the captured listening scene.
+    if (anchoredContext !== undefined) newMsg.listeningContext = anchoredContext;
 
     _messagesCache.push(newMsg);
     dbPutMessage(newMsg);
@@ -1294,6 +1358,10 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     const sessIdx = _sessionsCache.findIndex(s => s.id === msg.sessionId);
     if (sessIdx !== -1 && isSessionPreviewCandidate(newMsg)) {
         const target = _sessionsCache[sessIdx];
+        if (isUnreadChatMessage(newMsg)) {
+            target.unreadMessageIds = [...(target.unreadMessageIds || []), newMsg.id];
+            target.unreadCount = Math.max(0, target.unreadCount || 0) + 1;
+        }
         target.lastMessageId = newMsg.id;
         if (preview) target.lastMessagePreview = preview;
         target.updatedAt = newMsg.createdAt;
@@ -1303,6 +1371,10 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
         const sessions = loadChatSessions();
         const idx2 = sessions.findIndex(s => s.id === msg.sessionId);
         if (idx2 !== -1 && isSessionPreviewCandidate(newMsg)) {
+            if (isUnreadChatMessage(newMsg)) {
+                sessions[idx2].unreadMessageIds = [...(sessions[idx2].unreadMessageIds || []), newMsg.id];
+                sessions[idx2].unreadCount = Math.max(0, sessions[idx2].unreadCount || 0) + 1;
+            }
             sessions[idx2].lastMessageId = newMsg.id;
             if (preview) sessions[idx2].lastMessagePreview = preview;
             sessions[idx2].updatedAt = newMsg.createdAt;
@@ -1314,6 +1386,25 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
         window.dispatchEvent(new CustomEvent(CHAT_MESSAGE_PUSHED_EVENT, { detail: { message: newMsg } }));
     }
     emitChatPluginEvent("message.persisted", { message: newMsg });
+
+    if (newMsg.mediaType === "music_share" && !newMsg.mediaData?.musicTrack && typeof window !== "undefined") {
+        // All new shares (foreground/background/group) pass through this persistence boundary.
+        // Resolve metadata only: sharing must never interrupt playback.
+        const { musicTitle: title, musicArtist: artist } = newMsg.mediaData || {};
+        if (title) {
+            newMsg.mediaData = { ...newMsg.mediaData, musicResolution: "pending" };
+            dbPutMessage(newMsg);
+            void import("./music-share-resolution").then(module => module.resolveSharedSong(title, artist)).catch(() => null).then(track => {
+                const current = _messagesCache.find(item => item.id === newMsg.id);
+                if (!current || current.isRetracted || current.mediaType !== "music_share"
+                    || current.mediaData?.musicTitle !== title || current.mediaData?.musicArtist !== artist
+                    || current.mediaData?.musicTrack) return;
+                updateMessageMediaData(current.id, { ...current.mediaData,
+                    musicResolution: track ? "resolved" : "unresolved", ...(track ? { musicTrack: track } : {}) });
+                window.dispatchEvent(new CustomEvent("chat-messages-updated", { detail: { sessionId: current.sessionId } }));
+            });
+        }
+    }
 
     return newMsg;
 }
@@ -1700,6 +1791,16 @@ export function clearChatSessionMessages(sessionId: string) {
 
 function dispatchDeletedMessages(messages: ChatMessage[]): void {
     if (typeof window === "undefined" || messages.length === 0) return;
+    const removed = new Set(messages.map(message => message.id));
+    for (const session of _sessionsCache) {
+        const ids = session.unreadMessageIds || [];
+        const remaining = ids.filter(id => !removed.has(id));
+        if (remaining.length === ids.length) continue;
+        session.unreadMessageIds = remaining;
+        session.unreadCount = Math.max(0, session.unreadCount - (ids.length - remaining.length));
+        dbPutSessions([session]);
+    }
+    window.dispatchEvent(new Event(CHAT_UNREAD_UPDATED_EVENT));
     window.dispatchEvent(new CustomEvent(CHAT_MESSAGES_DELETED_EVENT, { detail: { messages } }));
     for (const message of messages) {
         emitChatPluginEvent("message.deleted", { id: message.id, sessionId: message.sessionId });
@@ -1939,39 +2040,23 @@ export function updateChatMessage(
     return updated;
 }
 
-function replacePhotoDirectiveDescription(
-    text: string | undefined,
-    oldDescription: string,
-    nextDescription: string,
-    nextUseReferenceImage?: boolean,
-): string | undefined {
+function replacePhotoDirectiveDescription(text: string | undefined, oldDescription: string, nextDescription: string): string | undefined {
     const oldDesc = oldDescription.trim();
     const nextDesc = nextDescription.trim();
-    // 原描述必须匹配到具体那一条照片标签才改：一条回复里可能有多张照片，
-    // 放宽成"原描述为空也改"会把其它照片的描述一并覆盖。
-    if (!text || !oldDesc || !nextDesc) return text;
+    if (!text || !oldDesc || !nextDesc || oldDesc === nextDesc) return text;
 
     let changed = false;
     const withExplicitMode = text.replace(/\[照片[:：]\s*(使用参考图|不使用参考图)\s*[:：]\s*([^\]]+?)\]/g, (full, mode: string, desc: string) => {
         if (desc.trim() !== oldDesc) return full;
-        const targetMode = nextUseReferenceImage !== undefined
-            ? (nextUseReferenceImage ? "使用参考图" : "不使用参考图")
-            : mode;
-        if (targetMode === mode && desc.trim() === nextDesc) return full;
         changed = true;
-        return `[照片:${targetMode}:${nextDesc}]`;
+        return `[照片:${mode}:${nextDesc}]`;
     });
     if (changed) return withExplicitMode;
 
     return text.replace(/\[照片[:：]\s*([^\]]+?)\]/g, (full, desc: string) => {
         if (desc.trim() !== oldDesc) return full;
-        const targetMode = nextUseReferenceImage !== undefined
-            ? (nextUseReferenceImage ? "使用参考图" : "不使用参考图")
-            : undefined;
-        const replacement = targetMode ? `[照片:${targetMode}:${nextDesc}]` : `[照片:${nextDesc}]`;
-        if (replacement === full) return full;
         changed = true;
-        return replacement;
+        return `[照片:${nextDesc}]`;
     });
 }
 
@@ -1979,14 +2064,13 @@ export function syncChatGeneratedImagePromptText(
     messageId: string,
     oldDescription: string,
     nextDescription: string,
-    nextUseReferenceImage?: boolean,
 ): ChatMessage[] {
     const target = _messagesCache.find(m => m.id === messageId);
     if (!target) return [];
 
     const changed = new Map<string, ChatMessage>();
-    const targetNextRaw = replacePhotoDirectiveDescription(target.rawResponseText, oldDescription, nextDescription, nextUseReferenceImage);
-    const targetNextEditable = replacePhotoDirectiveDescription(target.editableResponseText, oldDescription, nextDescription, nextUseReferenceImage);
+    const targetNextRaw = replacePhotoDirectiveDescription(target.rawResponseText, oldDescription, nextDescription);
+    const targetNextEditable = replacePhotoDirectiveDescription(target.editableResponseText, oldDescription, nextDescription);
 
     if (target.rawResponseText && targetNextRaw && targetNextRaw !== target.rawResponseText && target.responseBatchId) {
         for (const msg of _messagesCache) {

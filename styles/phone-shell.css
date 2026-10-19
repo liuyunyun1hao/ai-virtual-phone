@@ -1093,7 +1093,7 @@
     overflow: hidden;
     width: 100%;
     height: 100lvh;
-    background: var(--c-page-body-bg);
+    background: var(--mobile-browser-canvas, var(--c-page-body-bg));
   }
 
   .app-root {
@@ -1104,7 +1104,7 @@
     justify-content: flex-start;
     align-items: flex-start;
     overflow: hidden;
-    background: var(--c-page-body-bg);
+    background: var(--mobile-browser-canvas, var(--c-page-body-bg));
   }
 
   .phone-shell-wrap {

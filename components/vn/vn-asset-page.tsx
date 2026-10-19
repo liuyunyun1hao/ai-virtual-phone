@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Eraser, ImagePlus, Loader2, Trash2, User, Mountain, AlertCircle } from "lucide-react";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import {
   loadVnScenes,
   addVnScene,

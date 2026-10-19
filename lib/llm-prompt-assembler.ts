@@ -1,7 +1,12 @@
+import { listeningRoomPrompt, CHARACTER_LISTENING_INVITE_PROTOCOL } from "./listen-together";
 // lib/llm-prompt-assembler.ts
 
 import { Character } from "./character-types";
 import { ChatMessage } from "./chat-storage";
+import { musicListeningHistoryText, MUSIC_LISTENING_INSTRUCTION } from "./music-listening";
+import { echoHistoryText } from "./chat-echo";
+import { loveHistoryText } from "./chat-love";
+import { fireworksHistoryText } from "./chat-fireworks";
 import type { StateValue } from "./chat-storage";
 import { PresetConfig, Prompt, PromptOrderEntry, WorldBookConfig, RegexConfig, WorldBookEntry } from "./settings-types";
 import type { UserIdentity } from "@/components/settings/user-identity";
@@ -17,6 +22,16 @@ import { formatCharacterRelationsForPrompt } from "./character-world-storage";
 import { buildCharacterTimeContext, buildGroupTimeContext, type CharacterTimeContext } from "./character-time";
 import { formatShoppingPaymentRequestHistory } from "./shopping-payment-request";
 import { buildGroupAdminBracketText } from "./group-admin";
+import { describePhotoAnnotations } from "./chat-photo-markup";
+import { PHOTO_DOODLE_GUIDANCE } from "./photo-doodle";
+import { TRANSFER_CURRENCY_GUIDANCE } from "./transfer-protocol";
+import { voiceExpressionInstruction } from "./voice-expression";
+import { walletCurrencyInstruction, CHARACTER_CURRENCY_INSTRUCTION } from "./currency-context";
+import { albumChatContext } from "./photo-album-discussion";
+
+
+import { loadMomentsConfig } from "./moments-storage";
+import { buildMomentsBilingualInstruction, ensureMomentsBilingualInstruction } from "./moments-bilingual";
 
 export type LLMMessageRole = "system" | "user" | "assistant" | "tool";
 export type LLMToolCallPayload = { id: string; name: string; args: Record<string, unknown>; thoughtSignature?: string };
@@ -171,7 +186,15 @@ function isImageGenerationMediaMessage(msg: ChatMessage): boolean {
 function formatPhotoDirective(msg: ChatMessage, prefix = ""): string {
     const description = msg.mediaData?.label?.trim() || "图片";
     const mode = msg.mediaData?.useReferenceImage === true ? "使用参考图" : "不使用参考图";
-    return `${prefix}[照片:${mode}:${description}]`;
+    const count = msg.mediaData?.photoGroupCount || 1;
+    const active = Math.max(0, Math.min(count - 1, msg.mediaData?.photoGroupActiveIndex ?? 0));
+    const groupState = count > 1 && (msg.mediaData?.photoGroupIndex ?? 0) === 0
+        ? `\n[照片组状态:共${count}张；当前首图为第${active + 1}张；引用该组时以当前首图为准]`
+        : "";
+    const marks = msg.mediaData?.photoAnnotations?.length
+        ? `\n[照片现有标记:${describePhotoAnnotations(msg.mediaData.photoAnnotations)}]`
+        : "";
+    return `${prefix}[照片:${mode}:${description}]${groupState}${marks}`;
 }
 
 function formatImageGenerationDirective(msg: ChatMessage, prefix = ""): string {
@@ -186,11 +209,18 @@ function getPromptVisionImageUrl(msg: ChatMessage): string | undefined {
         const stickerUrl = msg.mediaData?.stickerUrl?.trim();
         return stickerUrl || undefined;
     }
+    if (msg.mediaType === "quote" && msg.mediaUrl) return msg.mediaUrl;
     return undefined;
 }
 
 function formatDirectVisionBody(msg: ChatMessage, userName: string, charName: string): string {
     if (msg.mediaType === "sticker") return formatRichMediaForHistory(msg, userName, charName);
+    if (msg.mediaType === "quote") {
+        const marks = msg.mediaData?.quotePhotoAnnotations?.length
+            ? `\n[被引用照片上的标记:${describePhotoAnnotations(msg.mediaData.quotePhotoAnnotations)}]`
+            : "";
+        return `[引用照片:${msg.mediaData?.quotePreview || msg.mediaData?.quotePhotoLabel || "照片"}]${msg.content}${marks}`;
+    }
     return isImageGenerationMediaMessage(msg)
         ? formatImageGenerationDirective(msg)
         : formatPhotoDirective(msg);
@@ -546,6 +576,12 @@ function pushChronologicalShortTermBlocks(params: {
             }
         }
 
+        body = musicListeningHistoryText(msg, fireworksHistoryText(msg, loveHistoryText(msg, echoHistoryText(msg, body))));
+        if (msg.mediaData?.tapback) {
+            const actor = msg.mediaData.tapbackBy === "assistant" ? characterName : resolvedUserName;
+            body = `${body}${body.trim() ? "\n" : ""}[Tapback:${actor}对这条消息回应了${msg.mediaData.tapback}；消息ID=${msg.id}]`;
+        }
+
         if (!body.trim() && !imageUrl) return;
 
         const isAssistantImage = imageUrl && msg.role === "assistant" && msg.mediaType === "media_file";
@@ -598,11 +634,26 @@ function isWBAtDepthPosition(entry: WorldBookEntry): boolean {
     return entry.position === 4;
 }
 
+function applyMomentsBilingualProtocol(messages: LLMMessage[], appId: string, activeTags: string[], instruction?: string): void {
+    if (appId === "moments") {
+        ensureMomentsBilingualInstruction(messages, instruction);
+        return;
+    }
+    // Online chat can publish Moments through cross-engine actions, outside the Moments service.
+    if ((appId !== "chat" && appId !== "group_chat") || !activeTags.includes("text") || activeTags.includes("offline")) return;
+    if (!messages.some(message => message.role === "system" && typeof message.content === "string"
+        && /\[[^\]\n]*朋友圈\]/.test(message.content))) return;
+    const config = loadMomentsConfig();
+    ensureMomentsBilingualInstruction(messages, buildMomentsBilingualInstruction(
+        config.bilingualTranslationEnabled === true, config.bilingualTranslationPrompt,
+    ));
+}
+
 /**
  * Core Engine: Assembles the final LLM payload array using Depth and Order injection rules.
- * 完全由预设驱动：宏展开、prompt_order（缺失时按 prompts 数组顺序）、
- * RELATIVE/ABSOLUTE injection_position 分类、标记条目定位。
- * 预设里没有的东西一律不注入——不存在人设/世界书/记忆的硬编码兜底。
+ * 预设驱动宏展开、prompt_order（缺失时按 prompts 数组顺序）、
+ * RELATIVE/ABSOLUTE injection_position 分类、标记条目定位；不硬编码补齐人设/世界书条目。
+ * 应用输出协议在组装后按场景补齐。
  */
 export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
     const { character, history, preset, worldBooks, regexes, userIdentity, userName = "User",
@@ -1007,6 +1058,12 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
                 }
             }
 
+            body = musicListeningHistoryText(msg, fireworksHistoryText(msg, loveHistoryText(msg, echoHistoryText(msg, body))));
+            if (msg.mediaData?.tapback) {
+                const actor = msg.mediaData.tapbackBy === "assistant" ? (character?.name || "对方") : resolvedUserName;
+                body = `${body}${body.trim() ? "\n" : ""}[Tapback:${actor}对这条消息回应了${msg.mediaData.tapback}；消息ID=${msg.id}]`;
+            }
+
             if (!body.trim() && !imageUrl) return;
             const isAssistantImage = imageUrl && msg.role === "assistant" && msg.mediaType === "media_file";
             const text = isAssistantImage
@@ -1035,6 +1092,16 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
                     fromHistory: true,
                 });
             }
+        });
+    }
+
+    if (appId === "chat") {
+        blocks.push({
+            text: `<photoMarkupCapability>\n照片标记/贴图是一个真实可执行动作，不是叙述性角色扮演。你必须先看清当前照片、现有标记和照片组序号，再按自己的性格决定是否二创。\n手绘使用 [照片标记:x百分比:y百分比:标记意图]；指定照片组用 [照片标记:第N张:x百分比:y百分比:标记意图]。爱心、星星、圈、箭头、框和下划线会由真实手绘渲染器落笔，其他短文字会以手写呈现。\nEmoji 二创使用 [照片贴图:x百分比:y百分比:缩放0.5到4:旋转角度:emoji:意图]；指定照片组用 [照片贴图:第N张:x百分比:y百分比:缩放:旋转:emoji:意图]。可放大、缩小、旋转，例如给猫戴帽子、用幽灵挡脸；位置与含义必须结合你实际看到的画面，不要盲贴。\n系统会永久记录你看的是哪张照片、原图描述、组内序号、你画/贴了什么及位置。禁止只声称完成却不输出协议；是否标记、画什么、是否和别人争抢二创均由你的性格和关系决定，但不要连续滥用。\n坐标说明：x、y 是贴图中心在整张图中的百分比，左上=(0,0)，右下=(100,100)。缩放1代表贴图约占图宽12%，2代表24%，3代表36%；根据目标头部/脸部实际大小选择，别总填1。旋转是度数，正数顺时针，负数逆时针。示例：[照片贴图:第2张:58:22:2.4:-18:👻:遮住右上方的人脸]。示例坐标不能照搬；看不清图片时不要声称准确定位。\n${PHOTO_DOODLE_GUIDANCE}</photoMarkupCapability>`,
+            role: "system",
+            depth: 0,
+            order: Number.MAX_SAFE_INTEGER - 2,
+            marker: "photoMarkupCapability",
         });
     }
 
@@ -1124,6 +1191,22 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
         }
     }
 
+    if (input.appId === "chat" || !input.appId) {
+        finalPayload.push({ role: "system", content: `${TRANSFER_CURRENCY_GUIDANCE}\n${CHARACTER_CURRENCY_INSTRUCTION}\n${walletCurrencyInstruction()}`, _debugMeta: { marker: "transfer_currency_protocol" } });
+        const voiceInstruction = voiceExpressionInstruction([character.id], activeTags.includes("voice") || activeTags.includes("video"));
+        if (voiceInstruction) finalPayload.push({ role: "system", content: voiceInstruction, _debugMeta: { marker: "voice_expression" } });
+        const albumContext = albumChatContext(input.character.id);
+        if (albumContext) finalPayload.push({ role: "system", content: albumContext, _debugMeta: { marker: "shared_album_context" } });
+    }
+    
+    
+    if (appId === "chat" && activeTags.includes("text") && history.at(-1)?.sessionId) finalPayload.push({ role: "system", content: CHARACTER_LISTENING_INVITE_PROTOCOL, _debugMeta: { marker: "character_listening_invite" } });
+    const together = appId === "chat" ? listeningRoomPrompt(character.id, history.at(-1)?.sessionId) : "";
+    if (together || history.some(message => message.listeningContext || message.mediaType === "music_share" || message.mediaType === "music")) finalPayload.push({ role: "system", content: MUSIC_LISTENING_INSTRUCTION, _debugMeta: { marker: "music_listening" } });
+    if (appId === "chat") {
+        if (together) finalPayload.push({ role: "system", content: together, _debugMeta: { marker: "listen_together" } });
+    }
+    applyMomentsBilingualProtocol(finalPayload, appId, activeTags, input.chatBilingualInstruction);
     return finalPayload;
 }
 
@@ -1144,8 +1227,8 @@ export function formatRichMediaForHistory(msg: ChatMessage, userName: string, ch
             const sn = d?.senderName;
             const rn = d?.recipientName;
             return isGroup && sn && rn
-                ? `[转账:${d?.amount ?? 0}:${d?.label ?? "转账"}:${sn}:${rn}]`
-                : `[转账:${d?.amount ?? 0}:${d?.label ?? "转账"}]`;
+                ? `[转账:${d?.amount ?? 0}:${d?.currency || "CNY"}:${d?.label ?? "转账"}:${sn}:${rn}]`
+                : `[转账:${d?.amount ?? 0}:${d?.currency || "CNY"}:${d?.label ?? "转账"}]`;
         }
         case "gift": {
             const giftName = d?.giftName || d?.label || "礼物";
@@ -1196,13 +1279,20 @@ export function formatRichMediaForHistory(msg: ChatMessage, userName: string, ch
             return `[表情包:${d?.label ?? "表情"}]`;
         case "quote":
             return `[引用:${d?.quotePreview ?? ""}]${msg.content}`;
+        case "photo_markup_action":
+            return `[照片二创事件:${msg.content || "做了照片标记"}${d?.photoMarkupTargetLabel ? `；原图内容：“${d.photoMarkupTargetLabel}”` : ""}${d?.photoMarkupTargetGroupCount && d.photoMarkupTargetGroupCount > 1 ? `；照片组位置：第${(d.photoMarkTargetIndex ?? 0) + 1}/${d.photoMarkupTargetGroupCount}张` : ""}${d?.photoMarkupSummary ? `；实际操作：${d.photoMarkupSummary}` : ""}]`;
+        case "private_alias_action":
+        case "group_name_action":
+            return `[聊天名称变更事件:${msg.content || d?.chatRenameValue || "名称已变更"}]`;
+        case "chat_background_change":
+            return `[聊天背景变更:${msg.content}]`;
         case "music": {
             const artist = d?.musicArtist ? `-${d.musicArtist}` : "";
             return `[音乐:${d?.musicTitle ?? d?.label ?? "未知歌曲"}${artist}]`;
         }
         case "music_share": {
             const mTitle = d?.musicTitle || "未知歌曲";
-            return `[音乐分享:${mTitle}]`;
+            return [`[音乐分享:${mTitle}${d?.musicArtist ? "|" + d.musicArtist : ""}]`, msg.content.trim()].filter(Boolean).join("\n");
         }
         case "xiaohongshu_note_share":
             return formatXiaohongshuShareForPrompt({
@@ -1298,40 +1388,6 @@ function resolveWorldBookDepth(entry: WorldBookEntry): number {
     return 995;
 }
 
-/**
- * 灾难性回溯（ReDoS）防护。
- *
- * 世界书的 key 和正则替换规则的 pattern 都是用户手写的，会直接拿去
- * `new RegExp(...)` 再对整段上下文 / 整条消息执行。只要写出 `(a+)+`、
- * `(\w+\s?)+x` 这类"量词套量词"的模式，在长文本上失配时回溯次数是
- * 输入长度的指数级——一次 .test() 就能把浏览器主线程钉死几十秒到永久，
- * 表现就是"页面点了没反应 / 整个手机卡住"。
- *
- * 这里做的是编译前的静态拦截：宁可误杀一条可疑规则（那条规则不生效），
- * 也绝不让整页卡死。
- */
-// 形如 (a+)+ / (\w+\s?)+x / (a*)* —— 被量词修饰的组里又含量词
-const REDOS_NESTED_QUANTIFIER = /\([^()]*[+*][^()]*\)[+*]/;
-// 正常用途写不出这么长的 pattern，超长一律按危险处理
-const MAX_REGEX_SRC_LENGTH = 500;
-// 参与正则匹配的文本上限；超出只保留尾部（关键词通常出现在近期对话里）
-const MAX_REGEX_TEST_TEXT_LENGTH = 200_000;
-
-/** 判断正则源码是否可能导致灾难性回溯。true = 有风险，不应编译执行。 */
-function isReDoSRiskyRegexSource(src: unknown): boolean {
-    if (typeof src !== "string" || !src) return false;
-    if (src.length > MAX_REGEX_SRC_LENGTH) return true;
-    return REDOS_NESTED_QUANTIFIER.test(src);
-}
-
-/** 给正则匹配兜底：文本过长时只保留尾部，避免超长输入放大回溯成本。 */
-function clampTextForRegex(text: string): string {
-    if (typeof text !== "string") return text;
-    return text.length > MAX_REGEX_TEST_TEXT_LENGTH
-        ? text.slice(text.length - MAX_REGEX_TEST_TEXT_LENGTH)
-        : text;
-}
-
 export function isWorldBookEntryActivated(entry: WorldBookEntry, contextText: string): boolean {
     if (entry.constant) return true;
 
@@ -1342,11 +1398,9 @@ export function isWorldBookEntryActivated(entry: WorldBookEntry, contextText: st
     let keyMatch = false;
     if (entry.use_regex) {
         keyMatch = keys.some(k => {
-            // 危险模式直接跳过：宁可这条 key 不生效，也不能把主线程卡死
-            if (isReDoSRiskyRegexSource(k)) return false;
             try {
                 const regex = new RegExp(k, "i");
-                return regex.test(clampTextForRegex(contextText));
+                return regex.test(contextText);
             } catch {
                 return false;
             }
@@ -1402,11 +1456,9 @@ function regexFromString(input: string): RegExp | null {
         const m = input.match(/(\/?)(.+)\1([a-z]*)/i);
         if (m) {
             if (m[3] && !/^(?!.*?(.).*?\1)[dgimsuyv]+$/.test(m[3])) {
-                // 整串按普通文本处理，仍要挡住超长输入
-                compiled = input.length > MAX_REGEX_SRC_LENGTH ? null : new RegExp(input);
+                compiled = new RegExp(input);
             } else {
-                // 用户自己写的 pattern：挡住量词嵌套这类会指数回溯的写法
-                compiled = isReDoSRiskyRegexSource(m[2]) ? null : new RegExp(m[2], m[3]);
+                compiled = new RegExp(m[2], m[3]);
             }
         }
     } catch {
@@ -1649,6 +1701,7 @@ export interface GroupAssemblerInput {
     cocreateReadActions?: string;
     groupTools?: string;
     groupRoster?: string;
+    spectatorContext?: string;
     customAppRichMediaDirectives?: string;
     chatBilingualInstruction?: string;
     statusRegionSection?: string;
@@ -1739,7 +1792,7 @@ function pushGroupChronologicalShortTermBlocks(params: {
         prevRole = promptRole;
         prevWasHistory = true;
 
-        let body = msg.content;
+        let body = musicListeningHistoryText(msg, msg.content);
         let imageUrl: string | undefined;
 
         const visionImageUrl = visionEnabled ? getPromptVisionImageUrl(msg) : undefined;
@@ -1806,9 +1859,18 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
     const SKIP_IN_MEMBER = new Set(["personaDescription"]);
 
     // 1. User persona block before members and chat history.
+    if (input.spectatorContext) blocks.push({
+        text: input.spectatorContext,
+        role: "system",
+        depth: beforeHistoryDepth,
+        order: orderIdx++,
+        marker: "group_session_presence",
+    });
     const userPersonaText = buildUserPersonaText(userIdentity, resolvedUserName);
     blocks.push({
-        text: wrapXml("personaDescription", userPersonaText),
+        text: wrapXml("personaDescription", input.spectatorContext
+            ? `以下是未在场人物的背景资料，不是群成员或场景在场者：\n${userPersonaText}`
+            : userPersonaText),
         role: "system",
         depth: beforeHistoryDepth,
         order: orderIdx++,
@@ -2219,7 +2281,7 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
             const showTs = ts && !(ts === prevTs && promptRole === prevRole);
             prevTs = ts;
             prevRole = promptRole;
-            let body = msg.content; // Already annotated with [SenderName]: prefix
+            let body = musicListeningHistoryText(msg, msg.content); // Already annotated with [SenderName]: prefix
             let imageUrl: string | undefined;
 
             const visionImageUrl = groupVisionEnabled ? getPromptVisionImageUrl(msg) : undefined;
@@ -2245,6 +2307,20 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
         });
     }
 
+    blocks.push({
+        text: `<photoMarkupCapability>\n照片标记/贴图是真实可执行动作。各角色必须先看清当前照片、已有二创与照片组序号，再按性格自行决定是否参与、争抢、接着画或拒绝。\n手绘协议：[照片标记:x百分比:y百分比:标记意图]；指定组内照片：[照片标记:第N张:x百分比:y百分比:标记意图]。爱心、星星、圈、箭头、框和下划线由手绘渲染器落笔，其他短文字以手写呈现。\nEmoji 二创协议：[照片贴图:x百分比:y百分比:缩放0.5到4:旋转角度:emoji:意图]；指定组内照片：[照片贴图:第N张:x百分比:y百分比:缩放:旋转:emoji:意图]。可缩放旋转，必须结合真实画面位置和语义。\n系统会永久记录执行角色、原图内容、组内第几张、实际操作及位置。禁止只声称完成却不输出协议；不要连续滥用。\n坐标说明：x、y 是贴图中心在整张图中的百分比，左上=(0,0)，右下=(100,100)。缩放1代表贴图约占图宽12%，2代表24%，3代表36%；根据目标头部/脸部实际大小选择，别总填1。旋转是度数，正数顺时针，负数逆时针。示例：[照片贴图:第2张:58:22:2.4:-18:👻:遮住右上方的人脸]。示例坐标不能照搬；看不清图片时不要声称准确定位。\n${PHOTO_DOODLE_GUIDANCE}</photoMarkupCapability>`,
+        role: "system",
+        depth: 0,
+        order: Number.MAX_SAFE_INTEGER - 2,
+        marker: "photoMarkupCapability",
+    });
+
+    blocks.push({ text: `${TRANSFER_CURRENCY_GUIDANCE}\n${CHARACTER_CURRENCY_INSTRUCTION}\n${walletCurrencyInstruction()}`, role: "system", depth: 0, order: Number.MAX_SAFE_INTEGER - 1, marker: "transfer_currency_protocol" });
+    const voiceInstruction = voiceExpressionInstruction(members.map(member => member.character.id), input.appTags?.includes("voice") || input.appTags?.includes("video"));
+    if (voiceInstruction) blocks.push({ text: voiceInstruction, role: "system", depth: 0, order: Number.MAX_SAFE_INTEGER - 1, marker: "voice_expression" });
+    
+    
+    if (input.history.some(message => message.listeningContext || message.mediaType === "music_share" || message.mediaType === "music")) blocks.push({ text: MUSIC_LISTENING_INSTRUCTION, role: "system", depth: 0, order: Number.MAX_SAFE_INTEGER - 1, marker: "music_listening" });
     // Sort: depth descending, then order ascending
     blocks.sort((a, b) => {
         if (b.depth !== a.depth) return b.depth - a.depth;
@@ -2322,6 +2398,7 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
         }
     }
 
+    applyMomentsBilingualProtocol(finalPayload, "group_chat", activeTags);
     return finalPayload;
 }
 

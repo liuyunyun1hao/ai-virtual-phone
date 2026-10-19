@@ -98,7 +98,11 @@ export async function personalPushFetch(
   action: string,
   init: RequestInit = {},
   params?: Record<string, string>,
+  identityMaintenance = false,
 ): Promise<Response> {
+  const { identityDispatchIsPaused, assertIdentityActive } = await import("./identity-runtime");
+  if (!identityMaintenance) assertIdentityActive();
+  if (identityDispatchIsPaused() && !identityMaintenance) throw new Error("身份切换中，已暂停云端任务");
   const { backup, state } = requirePersonalPushConfig();
   const headers = new Headers(init.headers);
   headers.set("x-ai-phone-service-key", backup.key.trim());
@@ -114,12 +118,12 @@ export async function personalPushFetch(
 
 /** 预约流量在个人云启用后直达用户 Supabase；未启用时保持原有站点通道。 */
 /** 在线开关个人云的每分钟任务扫描（网关函数直连数据库执行 cron 开关）。 */
-export async function setPersonalPushCloudScheduled(enabled: boolean): Promise<void> {
+export async function setPersonalPushCloudScheduled(enabled: boolean, identityMaintenance = false): Promise<void> {
   const res = await personalPushFetch("schedule", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enable: enabled }),
-  });
+  }, undefined, identityMaintenance);
   const data = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
   if (!res.ok || !data?.ok) {
     throw new Error(data?.error || `云函数返回 HTTP ${res.status}（旧版函数不支持在线开关，请到云服务部署里重新部署离线推送）`);
@@ -182,66 +186,6 @@ async function waitForPersonalPushHealth(
     if (!isTransientHealthFailure(health)) return { ready: false, error: lastError };
   }
   return { ready: false, error: lastError };
-}
-
-export type PersonalPushConnectOutcome =
-  | { status: "connected"; note?: string }
-  | { status: "absent"; error?: string };
-
-/**
- * 换设备重连：不重新部署、不需要 Access Token。
- * 用当前云备份配置（URL + service_role key）打一次既有网关函数的健康检查，
- * 通过就地恢复本机部署状态；函数不存在（404）或探测失败则维持未部署。
- * 旧版函数也接：基础离线推送可用，schemaVersion 如实记录，屏幕速聊等
- * 新能力仍由 isPersonalScreenChatCloudReady 按版本关着，提示用户升级部署。
- */
-export async function connectPersonalPushCloud(): Promise<PersonalPushConnectOutcome> {
-  const backup = loadCloudBackupConfig();
-  if (!isCloudBackupConfigured(backup)) {
-    throw new Error("请先填写并测试 Supabase 地址与 service_role key。");
-  }
-  const url = normalizeBackupUrl(backup.url);
-  const projectRef = projectRefFromUrl(url);
-  if (!projectRef) throw new Error("无法从 Supabase URL 解析项目标识。");
-
-  const res = await fetch(`${url}/functions/v1/${PERSONAL_PUSH_GATEWAY_SLUG}?action=health`, {
-    headers: {
-      "x-ai-phone-service-key": backup.key.trim(),
-      "x-ai-phone-origin": window.location.origin,
-    },
-    cache: "no-store",
-  }).catch(() => null);
-  if (!res) return { status: "absent", error: "无法连接 Supabase 云函数" };
-  if (res.status === 404) return { status: "absent" };
-  const data = await res.json().catch(() => ({})) as {
-    ok?: boolean;
-    error?: string;
-    schemaVersion?: number;
-    capabilities?: string[];
-  };
-  if (!(res.ok && data?.ok === true)) {
-    return { status: "absent", error: data?.error || `健康检查返回 HTTP ${res.status}` };
-  }
-
-  const reported = Number(data.schemaVersion);
-  const upToDate = reported >= PERSONAL_PUSH_SCHEMA_VERSION
-    && Boolean(data.capabilities?.includes("screen-chat-continuous"));
-  savePersonalPushState({
-    enabled: true,
-    projectRef,
-    url,
-    deployedAt: new Date().toISOString(),
-    healthStatus: "ready",
-    // 版本号如实记录；报了新版本号但缺能力标记的异常情况按旧版收，
-    // 免得屏幕速聊被误放行
-    schemaVersion: upToDate
-      ? reported
-      : Math.min(Number.isSafeInteger(reported) ? reported : 2, PERSONAL_PUSH_SCHEMA_VERSION - 1),
-  });
-  return {
-    status: "connected",
-    note: upToDate ? undefined : "云函数版本较旧：基础离线推送可用，屏幕速聊等新能力需重新部署升级（云端数据不受影响）。",
-  };
 }
 
 export async function deployPersonalPushCloud(accessToken: string): Promise<PersonalPushCloudState> {

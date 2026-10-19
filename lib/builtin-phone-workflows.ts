@@ -138,7 +138,7 @@ async function readPhoneKv(key) {
     if (db && Array.from(db.objectStoreNames).includes("entries")) {
         try {
             var transaction = db.transaction("entries", "readonly");
-            var record = await requestAsPromise(transaction.objectStore("entries").get(key));
+            var record = await requestAsPromise(transaction.objectStore("entries").get(identityKey(key)));
             if (record && typeof record.value === "string") return record.value;
         } finally {
             db.close();

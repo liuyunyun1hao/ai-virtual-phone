@@ -1,8 +1,9 @@
 "use client";
 
-// isAndroidBrowser 的单一实现已收到 lib/browser-platform.ts，这里保留 re-export
-// （group-call / video-call / voice-call / rich-input-modals 都从本模块取它）。
-export { isAndroidBrowser } from "@/lib/browser-platform";
+export function isAndroidBrowser(): boolean {
+    if (typeof navigator === "undefined") return false;
+    return /Android/i.test(navigator.userAgent);
+}
 
 export function isIOSDevice(): boolean {
     if (typeof navigator === "undefined") return false;

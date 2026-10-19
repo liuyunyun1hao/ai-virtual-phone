@@ -1,20 +1,31 @@
 // lib/group-chat-engine.ts
 // Group chat engine: single API call for all characters.
 
-import { ChatSession, ChatMessage, loadChatAppSettings, createResponseBatchId, createResponseRoundId, createToolExecutionId, loadChatSessions, getLatestCharacterStateValues } from "./chat-storage";
+import { ChatSession, ChatMessage, loadChatAppSettings, createResponseBatchId, createResponseRoundId, createToolExecutionId, loadChatSessions, getLatestCharacterStateValues, isSessionStreamingEnabled } from "./chat-storage";
 import { extractTextToolDirectiveText } from "./text-tool-protocol";
+import { getGroupDirectorNote, buildGroupTurnDirectionContext } from "./group-director-note";
+import { buildGroupDialogueFlowInstruction } from "./group-dialogue-flow";
+import { ONLINE_CHAT_CADENCE_INSTRUCTION } from "./chat-cadence";
 import type { ApiConfig, PresetConfig, RegexConfig } from "./settings-types";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
+import { assertCharacterIdentityAccess } from "./identity-access";
+import { buildGroupTapbackPrompt, buildPokeUsagePrompt } from "./chat-tapback";
+import { buildEchoPrompt, echoHistoryText } from "./chat-echo";
+import { buildLovePrompt, loveHistoryText } from "./chat-love";
+import { buildFireworksPrompt, fireworksHistoryText } from "./chat-fireworks";
+import { buildAvatarActionPrompt, buildGroupAvatarContext, getAvatarVisionPromptLimit } from "./chat-avatar-action";
+import { buildCurrentAvatarSnapshot } from "./chat-current-avatar-context";
 import { buildScreenEffectPromptHint } from "./chat-screen-effects";
 import { runChatPluginTransform } from "./chat-plugin-hooks";
 import { buildChatPluginPromptFragments } from "./chat-plugin-storage";
+import { buildImageDeliveryChatPrompt } from "./image-delivery-protocol";
+import { groupAlbumContext } from "./photo-album-discussion";
 import {
     sendLLMRequest,
     sendLLMStreamRequest,
     sendLLMToolRequest,
     sendLLMToolStreamRequest,
     ChatEngineError,
-    isStreamingEnabled,
     buildMusicLocalMacro,
     buildMusicCloudMacro,
     buildChatBilingualInstruction,
@@ -33,6 +44,8 @@ import {
     publishDebugPromptSnapshot,
     touchNativeExpandedToolSource,
     appendEmptyGenerateGuardMessage,
+    appendCurrentAvatarContext,
+    appendCurrentChatBackgroundContext,
     applyCustomPromptProfileToPreset,
     stripOnlineThinkingTag,
     stripPresetTexts,
@@ -84,6 +97,7 @@ import type { DebugPromptSnapshot } from "./debug-store";
 import { throwIfAborted } from "./abort-utils";
 import { buildCharacterTimeContext, buildGroupTimeContext } from "./character-time";
 import { getPromptTimestampOptionsForTimeContext } from "./prompt-time";
+import { buildGroupSpectatorContext, buildGroupDirectionContext } from "./group-spectator-context";
 
 function stripGroupFinancialActionsForMetadataRepair(text: string): string {
     return stripStateAndInnerForPrompt(text)
@@ -130,7 +144,7 @@ export function annotateGroupHistory(
 
         return {
             ...msg,
-            content: `[${senderName}]: ${content}`,
+            content: `[${senderName}]: ${fireworksHistoryText(msg, loveHistoryText(msg, echoHistoryText(msg, content)))}${msg.role === "user" && Array.isArray(msg.mediaData?.mentions) && msg.mediaData.mentions.length ? `\n[本条消息明确提及：${msg.mediaData.mentions.filter(m => m && charMap.has(m.characterId)).map(m => `${charMap.get(m.characterId)}（角色ID:${m.characterId}）`).join("、")}；提及是互动信息，不强制被提及者回复或其他成员沉默。]` : ""}`,
         };
     });
 }
@@ -289,7 +303,7 @@ export type GroupChatPromptBuildOptions = {
     apiConfigId?: string;
 };
 
-async function buildGroupChatPromptMessages(
+export async function buildGroupChatPromptMessages(
     session: ChatSession,
     history: ChatMessage[],
     options?: GroupChatPromptBuildOptions,
@@ -297,6 +311,7 @@ async function buildGroupChatPromptMessages(
     const chars = loadCharacters();
     const charMap = new Map(chars.map(c => [c.id, c]));
     const participantIds = session.participantIds || [];
+    for (const id of participantIds) assertCharacterIdentityAccess(id);
 
     const bindings = loadBindingConfig();
     const activeSlot = resolveBinding(bindings, undefined, "group_chat");
@@ -401,7 +416,7 @@ async function buildGroupChatPromptMessages(
     });
     const promptHistory = applyVisionImagePromptLimit(
         truncatedAnnotatedHistory.map(msg => ({ ...msg })),
-        session.visionImagePromptLimit,
+        getAvatarVisionPromptLimit(history, session.visionImagePromptLimit, config.enableImageRecognition === true && !isOfflineMode),
     );
     if (config.enableImageRecognition) {
         for (const msg of promptHistory) {
@@ -409,6 +424,8 @@ async function buildGroupChatPromptMessages(
         }
     }
 
+    const sharedAvatarContext = buildGroupAvatarContext(session.id, history, promptHistory, config.enableImageRecognition === true && !isOfflineMode);
+    const avatarInstructions = sharedAvatarContext + "\n群聊换头像按成员独立执行，不是全群只能换一次。用户邀请多人时，每个人各自判断；决定换的成员必须在自己的 [角色名]: 发言段内分别输出 [Avatar:候选ID]。不能由一个人的指令代替其他人，也不能因为以前换过就省略本轮指令。\n" + members.map(m => `${m.character.name}：${buildAvatarActionPrompt(session.id, m.character.id, history, promptHistory, config.enableImageRecognition === true && !isOfflineMode)}`).join("\n");
     const stickerRows = members.map(m => {
         const names = loadCustomStickers(m.character.id).map(sticker => sticker.name).filter(Boolean);
         return `${m.character.name}：${names.length > 0 ? names.join("，") : "无"}`;
@@ -457,6 +474,10 @@ async function buildGroupChatPromptMessages(
         members.map(m => ({ id: m.character.id, name: m.character.name })),
         userName,
     );
+    const spectatorContext = buildGroupSpectatorContext({
+        isSpectator: session.isSpectator && activeAppTags.includes("group_chat"),
+        userName, memberNames, offline: isOfflineMode, history,
+    });
 
     const llmMessages = assembleGroupPromptPayload({
         members,
@@ -484,6 +505,7 @@ async function buildGroupChatPromptMessages(
         tools: toolsPrompt,
         groupTools: groupToolsPrompt,
         groupRoster,
+        spectatorContext,
         customAppRichMediaDirectives,
         chatBilingualInstruction,
         statusRegionSection: resolveStatusRegionSection(statusRegionCfg, "group"),
@@ -493,6 +515,22 @@ async function buildGroupChatPromptMessages(
         offlineBilingualInstruction,
         offlineSummaryTag: preset?.story_summary_tag?.trim() || "summary",
         nativeToolHistory: usesNativeActions,
+    });
+    if (!isOfflineMode) {
+        await appendCurrentAvatarContext(llmMessages, buildCurrentAvatarSnapshot({
+            sessionId: session.id,
+            participantIds,
+            userIdentity,
+        }), config.enableImageRecognition);
+        await appendCurrentChatBackgroundContext(llmMessages, session, config.enableImageRecognition);
+    }
+    const sharedAlbumContext = groupAlbumContext(session.id);
+    if (sharedAlbumContext) llmMessages.push({ role: "system", content: sharedAlbumContext });
+    if (!isOfflineMode) llmMessages.push({
+        role: "system",
+        content: buildGroupTapbackPrompt(promptHistory) + "\n" + buildPokeUsagePrompt(promptHistory) + "\n" + avatarInstructions + "\n" + buildEchoPrompt() + "\n" + buildLovePrompt() + "\n" + buildFireworksPrompt()
+            + (promptProfile?.output === "plain_text" || promptProfile?.output === "json" ? "" : `\n${buildImageDeliveryChatPrompt()}`)
+            + `\n当前群聊名称是“${session.groupName || "群聊"}”。群成员可以依各自性格、关系和正在发生的事情，自主决定偶尔修改群名；不要机械执行，也不要频繁改名。真正决定修改时，该角色输出 [修改群名:新群名]，系统才会实际保存；禁止只用文字声称改好了却不输出协议。`,
     });
     if (promptProfile?.output === "plain_text") {
         llmMessages.push({
@@ -505,7 +543,25 @@ async function buildGroupChatPromptMessages(
             content: "本次自定义 APP AI 任务只输出严格 JSON。不要输出 Markdown 代码块、解释文字或聊天富媒体指令。",
         });
     }
-    appendEmptyGenerateGuardMessage(llmMessages, config, history);
+    if (activeAppTags.includes("group_chat") && !isOfflineMode && !promptProfile) {
+        llmMessages.push({ role: "system", content: buildGroupDialogueFlowInstruction() });
+        llmMessages.push({ role: "system", content: ONLINE_CHAT_CADENCE_INSTRUCTION });
+    }
+    if (spectatorContext) {
+        // Reinforce after preset/history/media blocks; never add a fake user turn
+        // for a spectator opening or empty-generate continuation.
+        llmMessages.push({ role: "system", content: spectatorContext });
+    } else {
+        appendEmptyGenerateGuardMessage(llmMessages, config, history);
+    }
+    if (activeAppTags.includes("group_chat")) {
+        const directionContext = buildGroupDirectionContext(session.groupDescription);
+        if (directionContext) llmMessages.push({ role: "system", content: directionContext });
+        if (spectatorContext) {
+            const turnDirection = buildGroupTurnDirectionContext(getGroupDirectorNote(session.id)?.text);
+            if (turnDirection) llmMessages.push({ role: "system", content: turnDirection });
+        }
+    }
 
     return { llmMessages, config, preset, regexes, nameToId, memberNames, enabledTools, userName, appTags: activeAppTags };
 }
@@ -583,6 +639,7 @@ async function runNativeGroupToolLoop(params: {
         userName: params.userName,
     };
     let nativeBundle = buildNativeChatTools(enabledTools, expandedSourceIds, nativeToolBuildOptions);
+    const loaderCatalog = buildNativeChatTools(enabledTools, [], nativeToolBuildOptions).loaderMap;
     const requestMessages: LlmRequestMessage[] = toLlmRequestMessages(llmMessages);
     const meta = { characterName: `群聊:${session.groupName || "群聊"}`, userName: params.userName };
     const expandableSourceKeys = new Set(enabledTools.filter(tool => !isNativeSingleTool(tool)).map(nativeToolSourceKey));
@@ -591,7 +648,7 @@ async function runNativeGroupToolLoop(params: {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
         let result: Awaited<ReturnType<typeof sendLLMToolRequest>>;
         try {
-            if (isStreamingEnabled(config, session, true)) {
+            if (isSessionStreamingEnabled(session, true)) {
                 let streamReasoning = "";
                 result = await sendLLMToolStreamRequest(config, preset, requestMessages, nativeBundle.definitions, regexes, meta, {
                     appId: "group_chat",
@@ -651,18 +708,17 @@ async function runNativeGroupToolLoop(params: {
         });
 
         const loaderCalls = result.toolCalls
-            .map(call => ({ call, loader: nativeBundle.loaderMap.get(call.name) }))
+            .map(call => ({ call, loader: loaderCatalog.get(call.name) }))
             .filter((item): item is { call: LlmToolCall; loader: { sourceKey: string; label: string } } => Boolean(item.loader));
-        const realNativeCalls = result.toolCalls.filter(call => !nativeBundle.loaderMap.has(call.name));
+        const realNativeCalls = result.toolCalls.filter(call => !loaderCatalog.has(call.name) && nativeBundle.realToolSourceMap.has(call.name));
         const textCalls = realNativeCalls.map(call => nativeGroupToolCallToTextCall(call, nativeBundle));
         const actorNames = [...new Set([
             ...loaderCalls.map(item => getNativeGroupActorName(item.call)),
             ...textCalls.map(call => call.actor),
         ].map(name => name?.trim()).filter(Boolean))].join("、") || "未标注角色";
-        const displayedActionNames = [
-            ...loaderCalls.map(item => `展开「${item.loader.label}」动作说明`),
+        const displayedActionNames = [...new Set([
             ...realNativeCalls.map(call => nativeBundle.displayNameMap.get(call.name) || nativeBundle.nameMap.get(call.name) || call.name),
-        ];
+        ])];
         if (displayedActionNames.length > 0) callbacks?.onToolNotice?.(`${actorNames}正在${displayedActionNames.join("、")}...`);
 
         let realResults: Awaited<ReturnType<typeof executeToolCalls>> = [];
@@ -696,12 +752,16 @@ async function runNativeGroupToolLoop(params: {
         }> = [];
         let realResultIndex = 0;
         let expandedChanged = false;
+        const expandedThisRound = new Set<string>();
 
         for (const nativeCall of result.toolCalls) {
-            const loader = nativeBundle.loaderMap.get(nativeCall.name);
+            const loader = loaderCatalog.get(nativeCall.name);
             if (loader) {
-                expandedSourceIds = touchNativeExpandedToolSource(expandedSourceIds, loader.sourceKey);
-                expandedChanged = true;
+                if (!expandedThisRound.has(loader.sourceKey) && !expandedSourceIds.includes(loader.sourceKey)) {
+                    expandedThisRound.add(loader.sourceKey);
+                    expandedSourceIds = touchNativeExpandedToolSource(expandedSourceIds, loader.sourceKey);
+                    expandedChanged = true;
+                }
                 const content = formatNativeLoaderToolResult(loader.label);
                 outcomes.push({
                     nativeCall,
@@ -714,6 +774,12 @@ async function runNativeGroupToolLoop(params: {
                     },
                     formattedContent: content,
                 });
+                continue;
+            }
+
+            if (!nativeBundle.realToolSourceMap.has(nativeCall.name)) {
+                const invalid = { name: "不可用动作", success: false, error: "此动作不在当前工具列表中，请使用已提供的动作。" };
+                outcomes.push({ nativeCall, result: invalid, formattedContent: formatNativeChatToolResult(invalid) });
                 continue;
             }
 
@@ -742,7 +808,7 @@ async function runNativeGroupToolLoop(params: {
             nativeBundle = buildNativeChatTools(enabledTools, expandedSourceIds, nativeToolBuildOptions);
         }
 
-        const notices = outcomes.map(item => (
+        const notices = outcomes.filter(item => realNativeCalls.some(call => call === item.nativeCall)).map(item => (
             item.result.userNotice || (item.result.success ? `✓ ${item.result.name} 执行成功` : `✗ ${item.result.name}: ${item.result.error}`)
         )).filter(Boolean).join("；");
         throwIfAborted(signal);
@@ -843,7 +909,7 @@ export async function generateGroupChatCompletion(
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         let filteredOutput: string;
         try {
-            if (isStreamingEnabled(config, session, true)) {
+            if (isSessionStreamingEnabled(session, true)) {
                 let streamReasoning = "";
                 const streamResult = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
                     appId: "group_chat",
@@ -1018,7 +1084,7 @@ export async function generateGroupChatCompletion(
 
             if (round === MAX_TOOL_ROUNDS - 1) {
                 try {
-                    if (isStreamingEnabled(config, session, true)) {
+                    if (isSessionStreamingEnabled(session, true)) {
                         let streamReasoning = "";
                         const streamFinal = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
                             appId: "group_chat",
@@ -1159,7 +1225,7 @@ export async function generateGroupOfflineChatCompletion(
         onReasoning: (t: string) => { reasoning = t; },
     };
     let rawOutput: string;
-    if (isStreamingEnabled(config, session, false) && options?.onStreamDelta) {
+    if (isSessionStreamingEnabled(session, false) && options?.onStreamDelta) {
         const streamResult = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
             appId: "group_chat",
             appTags: ["group_chat", "offline"],
@@ -1192,8 +1258,7 @@ export async function generateGroupOfflineChatCompletion(
     // 摘要缺失时自动补提：只带最后一轮上下文（系统提示 + 最后一条用户消息 + 本次输出），
     // 要求模型补一段摘要，避免「静默结束」导致该轮线下记录没有摘要、进不了短期记忆事件流。
     // 不重发完整 llmMessages：长对话下 token/延迟成本高，且摘要本来就只针对本轮关键事件。
-    // 会话里关了「摘要自动补提」就不再多发这一次请求：漏了就漏了，只调一次 API
-    const MAX_SUMMARY_RETRY = session.offlineSummaryRetry === false ? 0 : 2;
+    const MAX_SUMMARY_RETRY = 2;
     const lastUserMessage = [...llmMessages].reverse().find(m => m.role === "user");
     for (let attempt = 0; attempt < MAX_SUMMARY_RETRY; attempt += 1) {
         if (parsed.summary.trim()) break;

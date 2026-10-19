@@ -1,4 +1,4 @@
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import {
   loadBindingConfig,
   loadApiConfigs,

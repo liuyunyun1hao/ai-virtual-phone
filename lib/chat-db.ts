@@ -1,3 +1,6 @@
+import { identityDatabaseName } from "./identity-runtime";
+import { protectIdentityDatabase } from "./identity-db-guard";
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // lib/chat-db.ts
 // IndexedDB persistence layer for chat data using Dexie.js.
 // Provides async persistence behind the synchronous in-memory cache in chat-storage.ts.
@@ -13,7 +16,8 @@ class ChatDatabase extends Dexie {
     contacts!: Dexie.Table<ChatContact, string>;
 
     constructor() {
-        super("AiPhoneChatDB");
+        super(identityDatabaseName("AiPhoneChatDB"));
+        protectIdentityDatabase(this, "AiPhoneChatDB");
         this.version(1).stores({
             messages: "id, sessionId, createdAt",
             sessions: "id, contactId",
@@ -44,7 +48,7 @@ export async function initChatDb(): Promise<{
         return { messages: [], sessions: [], contacts: [] };
     }
 
-    const alreadyMigrated = window.localStorage.getItem(LS_MIGRATED_FLAG);
+    const alreadyMigrated = identityLocalStorage.getItem(LS_MIGRATED_FLAG);
 
     if (!alreadyMigrated) {
         // Guard against a lost migration flag while IndexedDB still holds data.
@@ -60,7 +64,7 @@ export async function initChatDb(): Promise<{
                 (await chatDb.sessions.count()) +
                 (await chatDb.contacts.count());
             if (existingCount > 0) {
-                window.localStorage.setItem(LS_MIGRATED_FLAG, "1");
+                identityLocalStorage.setItem(LS_MIGRATED_FLAG, "1");
                 const [messages, sessions, contacts] = await Promise.all([
                     chatDb.messages.toArray(),
                     chatDb.sessions.toArray(),
@@ -75,9 +79,9 @@ export async function initChatDb(): Promise<{
 
         // First run after migration: move localStorage data → IndexedDB
         try {
-            const rawMessages = window.localStorage.getItem(LS_MESSAGES_KEY);
-            const rawSessions = window.localStorage.getItem(LS_SESSIONS_KEY);
-            const rawContacts = window.localStorage.getItem(LS_CONTACTS_KEY);
+            const rawMessages = identityLocalStorage.getItem(LS_MESSAGES_KEY);
+            const rawSessions = identityLocalStorage.getItem(LS_SESSIONS_KEY);
+            const rawContacts = identityLocalStorage.getItem(LS_CONTACTS_KEY);
 
             const lsMessages: ChatMessage[] = rawMessages ? JSON.parse(rawMessages) : [];
             const lsSessions: ChatSession[] = rawSessions ? JSON.parse(rawSessions) : [];
@@ -94,10 +98,10 @@ export async function initChatDb(): Promise<{
             }
 
             // Mark as migrated and remove old localStorage data
-            window.localStorage.setItem(LS_MIGRATED_FLAG, "1");
-            window.localStorage.removeItem(LS_MESSAGES_KEY);
-            window.localStorage.removeItem(LS_SESSIONS_KEY);
-            window.localStorage.removeItem(LS_CONTACTS_KEY);
+            identityLocalStorage.setItem(LS_MIGRATED_FLAG, "1");
+            identityLocalStorage.removeItem(LS_MESSAGES_KEY);
+            identityLocalStorage.removeItem(LS_SESSIONS_KEY);
+            identityLocalStorage.removeItem(LS_CONTACTS_KEY);
 
             console.log(`[ChatDB] Migrated from localStorage: ${lsMessages.length} messages, ${lsSessions.length} sessions, ${lsContacts.length} contacts`);
 
@@ -105,9 +109,9 @@ export async function initChatDb(): Promise<{
         } catch (err) {
             console.error("[ChatDB] Migration failed, falling back to localStorage:", err);
             // If migration fails, load from localStorage as fallback
-            const fallbackMessages: ChatMessage[] = safeParse(window.localStorage.getItem(LS_MESSAGES_KEY));
-            const fallbackSessions: ChatSession[] = safeParse(window.localStorage.getItem(LS_SESSIONS_KEY));
-            const fallbackContacts: ChatContact[] = safeParse(window.localStorage.getItem(LS_CONTACTS_KEY));
+            const fallbackMessages: ChatMessage[] = safeParse(identityLocalStorage.getItem(LS_MESSAGES_KEY));
+            const fallbackSessions: ChatSession[] = safeParse(identityLocalStorage.getItem(LS_SESSIONS_KEY));
+            const fallbackContacts: ChatContact[] = safeParse(identityLocalStorage.getItem(LS_CONTACTS_KEY));
             return { messages: fallbackMessages, sessions: fallbackSessions, contacts: fallbackContacts };
         }
     }

@@ -1,3 +1,6 @@
+import { identityIndexedDbFactory } from "@/lib/identity-runtime";
+import { identityDatabaseName } from "./identity-runtime";
+import { protectIdentityDatabase } from "./identity-db-guard";
 // lib/reading-storage.ts — Dexie IndexedDB persistence for Reading feature.
 
 import Dexie from "dexie";
@@ -15,7 +18,8 @@ class ReadingDB extends Dexie {
     rawFiles!: Dexie.Table<{ bookId: string; data: Blob }, string>;
 
     constructor() {
-        super("reading-db");
+        super(identityDatabaseName("reading-db"));
+        protectIdentityDatabase(this, "reading-db");
         this.version(1).stores({
             books: "id",
             chapters: "id, bookId, [bookId+index]",
@@ -250,7 +254,7 @@ function openRawFileDatabaseAt(version?: number): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         let request: IDBOpenDBRequest;
         try {
-            request = version ? indexedDB.open(RAW_FILE_DB_NAME, version) : indexedDB.open(RAW_FILE_DB_NAME);
+            request = version ? identityIndexedDbFactory().open(identityDatabaseName(RAW_FILE_DB_NAME), version) : identityIndexedDbFactory().open(identityDatabaseName(RAW_FILE_DB_NAME));
         } catch (err) {
             reject(err);
             return;

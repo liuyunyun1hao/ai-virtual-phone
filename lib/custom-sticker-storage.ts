@@ -168,10 +168,11 @@ export async function addStickersToPack(
     packId: string,
     items: { name: string; blob: Blob }[],
     onProgress?: (done: number, total: number) => void,
-): Promise<{ added: number; failed: number }> {
+): Promise<{ added: number; failed: number; failedIndexes: number[] }> {
     const packs = readPacks();
     const pack = packs.find(p => p.id === packId);
-    if (!pack) return { added: 0, failed: items.length };
+    if (!pack) return { added: 0, failed: items.length, failedIndexes: items.map((_, i) => i) };
+    const failedIndexes: number[] = [];
     let added = 0;
     let failed = 0;
     for (let i = 0; i < items.length; i++) {
@@ -187,11 +188,12 @@ export async function addStickersToPack(
             added++;
         } catch {
             failed++;
+            failedIndexes.push(i);
         }
         onProgress?.(i + 1, items.length);
     }
     writePacks(packs);
-    return { added, failed };
+    return { added, failed, failedIndexes };
 }
 
 /** 上传前预检：通过返回 null，否则返回给用户看的错误文案（目前只有动图体积限制）。 */
@@ -212,6 +214,23 @@ export function addStickerByUrlToPack(packId: string, name: string, url: string)
     pack.stickers.push(item);
     writePacks(packs);
     return item;
+}
+
+/** URL imports only store references. Write the pack index once, even for hundreds of stickers. */
+export function addStickerUrlsToPack(packId: string, rows: { name: string; url: string }[]): number {
+    const packs = readPacks();
+    const pack = packs.find(p => p.id === packId);
+    if (!pack) throw new Error('表情分组已不存在，请重新打开分组');
+    for (const [index, row] of rows.entries()) {
+        const url = new URL(row.url);
+        if (!/^https?:$/.test(url.protocol) || !row.name.trim()) throw new Error('表情名称或链接无效');
+        pack.stickers.push({
+            id: `stk_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`,
+            name: row.name.trim(), assetId: '', externalUrl: url.href,
+        });
+    }
+    if (rows.length) writePacks(packs);
+    return rows.length;
 }
 
 export function renameStickerInPack(packId: string, stickerId: string, newName: string): void {

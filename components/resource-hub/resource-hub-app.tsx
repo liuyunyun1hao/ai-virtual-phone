@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hydrateKvDb, kvGet, kvSet, registerKvMigration } from "@/lib/kv-db";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import { loadChatContacts } from "@/lib/chat-storage";
 import {
     checkImportFileForDestination,
@@ -15,7 +15,6 @@ import {
     importResourceHubFile,
     fetchPresetEntry,
     applyPresetEntry,
-    fetchResourceHubText,
     loadResourceHubSource,
     purgeShareIndexCache,
     resolveResourceHubAssetUrl,
@@ -41,7 +40,7 @@ import {
     type ResourceHubUploadConfig,
 } from "@/lib/resource-hub-upload";
 import { avatarBase64, fileToAvatarDataUrl, loadHubProfile, saveHubProfile, type HubProfile } from "@/lib/resource-hub-profile";
-import { CONTRIB_WALL_PATH, fetchMergedContributions, parseContribWallJson, type MergedContribution } from "@/lib/community-contrib";
+import { fetchMergedContributions, type MergedContribution } from "@/lib/community-contrib";
 import {
     ensureIdentityKey,
     exportKeyBundle,
@@ -131,26 +130,10 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
         setSearchQuery("");
         if (buildWall || buildWallState === "loading") return;
         setBuildWallState("loading");
-        void (async () => {
-            // 首选：share 仓库里的 _wall.json 静态快照，走集市同款三镜像
-            // （jsDelivr 国内可达、免限流、不花函数额度）。自定义资源仓库没有
-            // 这个文件时静默落空，走下面的直连兜底。
-            try {
-                const wall = parseContribWallJson(await fetchResourceHubText(source, CONTRIB_WALL_PATH));
-                if (wall) {
-                    setBuildWall(wall);
-                    setBuildWallState("idle");
-                    return;
-                }
-            } catch { /* 快照读不到 → 直连 GitHub search 兜底 */ }
-            try {
-                setBuildWall(await fetchMergedContributions());
-                setBuildWallState("idle");
-            } catch {
-                setBuildWallState("error");
-            }
-        })();
-    }, [buildWall, buildWallState, source]);
+        fetchMergedContributions()
+            .then(list => { setBuildWall(list); setBuildWallState("idle"); })
+            .catch(() => setBuildWallState("error"));
+    }, [buildWall, buildWallState]);
     // 图片全屏预览（点开可保存）
     const [previewImage, setPreviewImage] = useState<string | null>(null);
     // 送花：各资源花数（我的货摊展示用）+ 非阻塞小提示
@@ -567,12 +550,8 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
     const handleDeleteEntry = useCallback(async (entry: ShareIndexEntry) => {
         setDeleting(true);
         try {
-            // 本人上传的用删除凭证走上传服务；否则按管理员 Token 直删。
-            // 认人必须和显示删除按钮用同一套判断（myRecordFor）：它除了本机记录，
-            // 还认索引里的钥匙指纹。之前这里只查本机记录，换了设备、只导入了钥匙，
-            // 或者本机记录的路径和服务端安全化后的文件夹名对不上时，按钮照常显示，
-            // 点下去却走了管理员 Token 那条路，普通作者就会看到「请先填入 GitHub Token」。
-            const myRecord = myRecordFor(entry.path);
+            // 本人上传的用删除凭证走上传服务；否则按管理员 Token 直删
+            const myRecord = loadMyUploads().find(r => r.path === entry.path);
             if (myRecord) {
                 await ownerDeleteViaService(loadUploadConfig().endpoint, myRecord);
             } else {
@@ -592,7 +571,7 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
         } finally {
             setDeleting(false);
         }
-    }, [myRecordFor, onNotice]);
+    }, [onNotice]);
 
     const handleSubmitClaim = useCallback(async () => {
         const entry = index?.entries.find(e => e.path === claimPath);
@@ -962,7 +941,7 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
                             <div className="rh-build-wall-sub">每一条被采纳的改进，都会刻在这里</div>
                             {buildWallState === "loading" && <div className="rh-center-hint">正在读取贡献墙...</div>}
                             {buildWallState === "error" && (
-                                <div className="rh-center-hint">贡献墙暂时读取失败（网络不通或 GitHub 接口限流），稍后再来看看</div>
+                                <div className="rh-center-hint">贡献墙暂时读取失败（GitHub 接口限流），稍后再来看看</div>
                             )}
                             {buildWall && buildWall.length === 0 && (
                                 <div className="rh-center-hint">虚位以待——第一个被采纳的改进会出现在这里</div>

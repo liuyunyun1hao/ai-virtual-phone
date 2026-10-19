@@ -1,4 +1,5 @@
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
+import { CHARACTER_CURRENCY_INSTRUCTION } from "./currency-context";
 import { normalizeBilingualTextInput, splitBilingualText } from "./bilingual-text";
 import { previewMessagesForApi, sendLLMRequest } from "./chat-engine";
 import { getChatMessagePreview, loadChatMessages, loadChatSessions, type ChatMessage, type ChatSession } from "./chat-storage";
@@ -1192,7 +1193,7 @@ async function buildCheckPhoneAppMessages(
     retrieveCoreMemoriesForPrompt(characterId, memConfig).catch(() => null),
   ]);
 
-  return assemblePromptPayload({
+  const messages = assemblePromptPayload({
     character,
     history: [],
     preset,
@@ -1216,6 +1217,10 @@ async function buildCheckPhoneAppMessages(
       settings.bilingualTranslationPrompt,
     ),
   });
+  if (["assets", "shopping"].includes(appId)) {
+    messages.push({ role: "system", content: `${CHARACTER_CURRENCY_INSTRUCTION}\n金额字段必须包含明确的 ISO 币种代码及数字，例如 USD 100.00、-USD 20.00；余额与流水沿用对应账户币种，购物价格按角色所在地定价。不要用无法区分 USD/CAD/AUD 或 CNY/JPY 的单独 $ / ¥ 代替币种代码。保留原有输出字段及结构，不输出汇率。` });
+  }
+  return messages;
 }
 
 function normalizeNotesPayload(payload: unknown): CheckPhoneNotesPayload | null {

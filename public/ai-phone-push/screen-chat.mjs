@@ -7,10 +7,6 @@
 //      以角色在小手机中的唯一 sessionId 为准，只暂存尚未回端的文字增量 → 每轮原子写
 //      push_outbox(kind=bridge)，小手机打开时合并进原聊天记录。不持久化截图。
 // 注意：自包含移植文件，改动共享逻辑时需同步 push-bridge / push-generate。
-//      分条逻辑在本文件内联为 popupTextFromReply（返回拼好的单串，非数组）。
-//      空白口径已在 2026-10-16 统一到 \s+（段内换行压成空格），与 push-generate /
-//      push-bridge 一致；本文件原先用 [ \t]+ 保留段内换行，是两处实现的漂移。
-//      若快捷指令弹窗需要保留换行，改回 [ \t]+ 时务必同步另两处并更新部署包。
 
 type ProviderKind = "openai-compatible" | "anthropic" | "gemini";
 
@@ -102,7 +98,7 @@ function popupTextFromReply(rawText: string): string {
   const parts = text
     .split(/\n\n+/)
     .map(segment => humanizeSegment(segment.trim()))
-    .map(segment => segment.replace(/\s+/g, " ").trim())
+    .map(segment => segment.replace(/[ \t]+/g, " ").trim())
     .filter(Boolean);
   return (parts.join("\n") || "……").slice(0, 1200);
 }
@@ -143,15 +139,13 @@ const IMAGE_MARKER = "SCREEN_CHAT_IMAGE_SLOT";
 
 const MAX_BODY_BYTES = 3 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-// 每日次数不设上限：已部署的个人云 RPC 签名里仍有 p_daily_cap 参数，传一个够不着的数即可
-const UNLIMITED_DAILY_CAP = 1_000_000_000;
+const DEFAULT_DAILY_CAP = 120;
 const MAX_PENDING_TURNS = 500;
 
 type ScreenSnapshot = {
   replyRequest?: { url: string; headers: Record<string, string>; body: Record<string, unknown>; providerKind: ProviderKind };
   enableVision?: boolean;
   ackSequence?: number;
-  /** 旧字段：曾用于覆盖每日上限，上限已取消，读它的只剩未重新部署的旧函数 */
   dailyCap?: number;
   chat?: { characterId?: string; sessionId?: string; characterName?: string };
   reply?: Record<string, unknown>;
@@ -458,6 +452,7 @@ Deno.serve(async (request: Request) => {
     }
 
     // 按角色原子串行生成并计数；不会因双击过快而覆盖另一轮。
+    const dailyCap = Math.max(10, Math.min(500, Number(snapshot.dailyCap) || DEFAULT_DAILY_CAP));
     const lockToken = crypto.randomUUID();
     let lockHeld = false;
     try {
@@ -468,7 +463,7 @@ Deno.serve(async (request: Request) => {
           p_character_id: characterId,
           p_session_id: canonicalSessionId,
           p_lock_token: lockToken,
-          p_daily_cap: UNLIMITED_DAILY_CAP,
+          p_daily_cap: dailyCap,
         }),
       });
       if (!beginResponse.ok) {
@@ -477,6 +472,9 @@ Deno.serve(async (request: Request) => {
       }
       const begin = await beginResponse.json().catch(() => ({})) as BeginResult;
       if (begin.status === "busy") return json({ ok: false, error: "角色正在回复上一条，请稍后再试。" }, 409);
+      if (begin.status === "daily_cap") {
+        return json({ ok: false, error: `今天的屏幕速聊次数已达上限（${dailyCap} 次），明天再来吧。` }, 429);
+      }
       if (begin.status !== "ok") return json({ ok: false, error: "无法取得屏幕速聊会话锁。" }, 500);
       lockHeld = true;
 

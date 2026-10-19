@@ -1,6 +1,6 @@
 import { jsonrepair } from "jsonrepair";
 
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { Character } from "./character-types";
 import type { UserIdentity } from "@/components/settings/user-identity";
 import { previewMessagesForApi, sendLLMRequest, ChatEngineError } from "./chat-engine";
@@ -29,7 +29,6 @@ import {
   type InterviewUserSnapshot,
   type InterviewWorldBookSnapshot,
 } from "./interview-magazine-types";
-import { createId } from "./id-utils";
 
 type InterviewGuestContext = {
   character: Character;
@@ -65,6 +64,10 @@ type HostQuestionResult = {
   targetGuest?: string;
   targetCharacterId?: string;
 };
+
+function createId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
 
 function cleanText(value: unknown, maxLength: number): string {
   return String(value ?? "")

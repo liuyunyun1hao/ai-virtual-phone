@@ -19,6 +19,7 @@ export type WalletAccountType = "balance" | "card";
 export type WalletTransactionKind = "transfer_in" | "transfer_out" | "payment" | "refund" | "adjustment";
 
 export type WalletTransaction = {
+  currency?: string;
   id: string;
   cardId: string;
   accountType?: WalletAccountType;
@@ -33,6 +34,7 @@ export type WalletTransaction = {
 };
 
 export type WalletState = {
+  currency?: string;
   balance: number;
   cards: WalletCard[];
   transactions: WalletTransaction[];

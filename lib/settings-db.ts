@@ -1,3 +1,4 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // lib/settings-db.ts
 // IndexedDB persistence for presets, world books, and regex configs.
 // Same pattern as chat-db.ts: in-memory cache + async fire-and-forget writes.
@@ -48,7 +49,7 @@ function safeParse<T>(raw: string | null): T[] {
 export async function hydrateSettingsDb(): Promise<void> {
     if (_hydrated || typeof window === "undefined") return;
 
-    const alreadyMigrated = window.localStorage.getItem(LS_MIGRATED_FLAG);
+    const alreadyMigrated = identityLocalStorage.getItem(LS_MIGRATED_FLAG);
 
     if (!alreadyMigrated) {
         // Guard against a lost migration flag while IndexedDB still holds data.
@@ -62,7 +63,7 @@ export async function hydrateSettingsDb(): Promise<void> {
                 (await settingsDb.worldBooks.count()) +
                 (await settingsDb.regexes.count());
             if (existingCount > 0) {
-                window.localStorage.setItem(LS_MIGRATED_FLAG, "1");
+                identityLocalStorage.setItem(LS_MIGRATED_FLAG, "1");
                 const [presets, worldBooks, regexes] = await Promise.all([
                     settingsDb.presets.toArray(),
                     settingsDb.worldBooks.toArray(),
@@ -81,18 +82,18 @@ export async function hydrateSettingsDb(): Promise<void> {
 
         // Migrate from localStorage → IndexedDB
         try {
-            const lsPresets: PresetConfig[] = safeParse(window.localStorage.getItem(LS_PRESETS_KEY));
-            const lsWorldBooks: WorldBookConfig[] = safeParse(window.localStorage.getItem(LS_WORLDBOOKS_KEY));
-            const lsRegexes: RegexConfig[] = safeParse(window.localStorage.getItem(LS_REGEXES_KEY));
+            const lsPresets: PresetConfig[] = safeParse(identityLocalStorage.getItem(LS_PRESETS_KEY));
+            const lsWorldBooks: WorldBookConfig[] = safeParse(identityLocalStorage.getItem(LS_WORLDBOOKS_KEY));
+            const lsRegexes: RegexConfig[] = safeParse(identityLocalStorage.getItem(LS_REGEXES_KEY));
 
             if (lsPresets.length > 0) await settingsDb.presets.bulkPut(lsPresets);
             if (lsWorldBooks.length > 0) await settingsDb.worldBooks.bulkPut(lsWorldBooks);
             if (lsRegexes.length > 0) await settingsDb.regexes.bulkPut(lsRegexes);
 
-            window.localStorage.setItem(LS_MIGRATED_FLAG, "1");
-            window.localStorage.removeItem(LS_PRESETS_KEY);
-            window.localStorage.removeItem(LS_WORLDBOOKS_KEY);
-            window.localStorage.removeItem(LS_REGEXES_KEY);
+            identityLocalStorage.setItem(LS_MIGRATED_FLAG, "1");
+            identityLocalStorage.removeItem(LS_PRESETS_KEY);
+            identityLocalStorage.removeItem(LS_WORLDBOOKS_KEY);
+            identityLocalStorage.removeItem(LS_REGEXES_KEY);
 
             console.log(`[SettingsDB] Migrated: ${lsPresets.length} presets, ${lsWorldBooks.length} worldBooks, ${lsRegexes.length} regexes`);
 
@@ -101,9 +102,9 @@ export async function hydrateSettingsDb(): Promise<void> {
             _regexes = lsRegexes;
         } catch (err) {
             console.error("[SettingsDB] Migration failed, falling back to localStorage:", err);
-            _presets = safeParse(window.localStorage.getItem(LS_PRESETS_KEY));
-            _worldBooks = safeParse(window.localStorage.getItem(LS_WORLDBOOKS_KEY));
-            _regexes = safeParse(window.localStorage.getItem(LS_REGEXES_KEY));
+            _presets = safeParse(identityLocalStorage.getItem(LS_PRESETS_KEY));
+            _worldBooks = safeParse(identityLocalStorage.getItem(LS_WORLDBOOKS_KEY));
+            _regexes = safeParse(identityLocalStorage.getItem(LS_REGEXES_KEY));
         }
     } else {
         // Already migrated: load from IndexedDB

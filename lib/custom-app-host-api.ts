@@ -10,7 +10,7 @@ import {
 } from "./custom-app-storage";
 import { buildCustomAppChatTags } from "./custom-app-tags";
 import { hydrateKvDb } from "./kv-db";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import {
   addChatContact,
   createOrGetSession,
@@ -344,7 +344,7 @@ function resolveCalendarOwner(record: Record<string, unknown>): { ownerType: Cal
   const ownerType: CalendarOwnerType = rawOwnerType === "character" || record.characterId ? "character" : "user";
   const ownerId = ownerType === "character"
     ? cleanText(record.ownerId ?? record.characterId, 160)
-    : cleanText(record.ownerId ?? record.userId, 160) || resolveUserIdentity()?.id || "default_user";
+    : resolveUserIdentity()?.id || "default_user";
   if (!ownerId) throw new Error("calendar 缺少 ownerId 或 characterId。");
   return { ownerType, ownerId };
 }

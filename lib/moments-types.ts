@@ -6,6 +6,9 @@ export type MomentPost = {
     authorType: "user" | "character";
     authorId: string;               // characterId or "user"
     content: string;
+    musicLyricShare?: { title: string; artist: string; text: string; coverUrl?: string; caption?: string };
+    contentTranslation?: string;
+    contentTranslationSource?: string;
     photoUrl?: string;              // user-uploaded base64 image
     photoDescription?: string;      // AI-generated photo description (for placeholder rendering)
     photoUseReferenceImage?: boolean; // AI-generated photo should use character reference image

@@ -1,57 +1,53 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { Component, memo, useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
+import { Component, memo, useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
 import { updateStatusBarTone } from "@/lib/bg-tone";
+import { EdgeSwipeBack } from "@/components/ui/edge-swipe-back";
 import { startDiaryEntryTimerService, stopDiaryEntryTimerService } from "@/lib/diary-entry-timer-service";
 import { startFollowUpService, stopFollowUpService } from "@/lib/follow-up-service";
 import { startMomentsService, stopMomentsService } from "@/lib/moments-engine";
+import { startAlbumReviewService, stopAlbumReviewService } from "@/lib/photo-album-review";
 import { bgTimerCleanup } from "@/lib/bg-timer";
+import { PhoneThemeApp } from "@/components/phone-theme-app";
+import { PhoneCharacterApp } from "@/components/phone-character-app";
+import { PhoneSettingsApp } from "@/components/phone-settings-app";
+import { PhoneChatApp } from "@/components/chat/phone-chat-app";
 import { PhonePlaceholderApp } from "@/components/phone-placeholder-app";
+import MusicApp from "@/components/music/music-app";
 import MusicPlayer from "@/components/music/music-player";
 import MusicFloat from "@/components/music/music-float";
+import ShareDestinationSheet from "@/components/chat/share-destination-sheet";
+import QuickReplyWindow from "@/components/chat/quick-reply-window";
 import MiniAppWindow from "@/components/music/mini-app-window";
+import { PhoneCalendarApp } from "@/components/calendar-app";
+import { PhoneQaApp } from "@/components/phone-qa-app";
 import { ChatPluginPageBoundary } from "@/components/chat/chat-plugin-page-boundary";
+import { ResourceHubApp } from "@/components/resource-hub/resource-hub-app";
 import "@/lib/qa-error-log";
+import { RealityBridgeApp } from "@/components/reality-bridge-app";
 import { REALITY_BRIDGE_APP_EVENT_NAME, REALITY_BRIDGE_DATA_EVENT } from "@/lib/reality-bridge/types";
+import { DiaryApp } from "@/components/diary/diary-app";
+import { XiaohongshuApp } from "@/components/xiaohongshu/xiaohongshu-app";
+import { StoryApp } from "@/components/story/story-app";
+import { VnApp } from "@/components/vn/vn-app";
+import ReadingApp from "@/components/reading/reading-app";
+import MapApp from "@/components/map/map-app";
+import { DwellingApp } from "@/components/dwelling/dwelling-app";
 import { MascotFloat } from "@/components/mascot/mascot-float";
 import { MascotPreviewHost } from "@/components/mascot/mascot-preview-host";
 import { useMusicControlsOptional } from "@/lib/music-context";
-import type { ResourceSubPage } from "@/components/phone-resources-app";
+import { PhoneResourcesApp, type ResourceSubPage } from "@/components/phone-resources-app";
+import { CheckPhoneApp } from "@/components/checkphone/checkphone-app";
+import { ShoppingApp } from "@/components/shopping/shopping-app";
+import { GameHubApp } from "@/components/game/game-hub-app";
+import { MixologyApp } from "@/components/mixology/mixology-app";
+import InterviewMagazineApp from "@/components/interview/interview-magazine-app";
+import { CoCreateApp } from "@/components/cocreate/cocreate-app";
+import { PhotoAlbumApp } from "@/components/photo-album/photo-album-app";
+import { AppMarketApp } from "@/components/app-market/app-market-app";
+import { CustomAppRunner } from "@/components/app-market/custom-app-runner";
 import { CustomAppForegroundBoundary } from "@/components/app-market/custom-app-failure";
-
-// 以下 25 个 App 一律按需加载。
-// 它们原本是静态 import，意味着打开首页就要把游戏中心、地图、阅读器、调酒、
-// three.js 等上万个模块一起下载并执行，首屏又慢又卡。改成 dynamic 后，
-// 每个 App 单独打成 chunk，只在被点开的那一刻才加载；主包只剩桌面本身
-// 和常驻悬浮控件（音乐浮窗、迷你窗、桌宠）。
-// ssr:false 是必要的——这些 App 依赖 IndexedDB/localStorage，服务端渲染无意义。
-const PhoneThemeApp = dynamic(() => import("@/components/phone-theme-app").then((m) => m.PhoneThemeApp), { ssr: false });
-const PhoneCharacterApp = dynamic(() => import("@/components/phone-character-app").then((m) => m.PhoneCharacterApp), { ssr: false });
-const PhoneSettingsApp = dynamic(() => import("@/components/phone-settings-app").then((m) => m.PhoneSettingsApp), { ssr: false });
-const PhoneChatApp = dynamic(() => import("@/components/chat/phone-chat-app").then((m) => m.PhoneChatApp), { ssr: false });
-const MusicApp = dynamic(() => import("@/components/music/music-app"), { ssr: false });
-const PhoneCalendarApp = dynamic(() => import("@/components/calendar-app").then((m) => m.PhoneCalendarApp), { ssr: false });
-const PhoneQaApp = dynamic(() => import("@/components/phone-qa-app").then((m) => m.PhoneQaApp), { ssr: false });
-const ResourceHubApp = dynamic(() => import("@/components/resource-hub/resource-hub-app").then((m) => m.ResourceHubApp), { ssr: false });
-const RealityBridgeApp = dynamic(() => import("@/components/reality-bridge-app").then((m) => m.RealityBridgeApp), { ssr: false });
-const DiaryApp = dynamic(() => import("@/components/diary/diary-app").then((m) => m.DiaryApp), { ssr: false });
-const XiaohongshuApp = dynamic(() => import("@/components/xiaohongshu/xiaohongshu-app").then((m) => m.XiaohongshuApp), { ssr: false });
-const StoryApp = dynamic(() => import("@/components/story/story-app").then((m) => m.StoryApp), { ssr: false });
-const VnApp = dynamic(() => import("@/components/vn/vn-app").then((m) => m.VnApp), { ssr: false });
-const ReadingApp = dynamic(() => import("@/components/reading/reading-app"), { ssr: false });
-const MapApp = dynamic(() => import("@/components/map/map-app"), { ssr: false });
-const DwellingApp = dynamic(() => import("@/components/dwelling/dwelling-app").then((m) => m.DwellingApp), { ssr: false });
-const PhoneResourcesApp = dynamic(() => import("@/components/phone-resources-app").then((m) => m.PhoneResourcesApp), { ssr: false });
-const CheckPhoneApp = dynamic(() => import("@/components/checkphone/checkphone-app").then((m) => m.CheckPhoneApp), { ssr: false });
-const ShoppingApp = dynamic(() => import("@/components/shopping/shopping-app").then((m) => m.ShoppingApp), { ssr: false });
-const GameHubApp = dynamic(() => import("@/components/game/game-hub-app").then((m) => m.GameHubApp), { ssr: false });
-const MixologyApp = dynamic(() => import("@/components/mixology/mixology-app").then((m) => m.MixologyApp), { ssr: false });
-const InterviewMagazineApp = dynamic(() => import("@/components/interview/interview-magazine-app"), { ssr: false });
-const CoCreateApp = dynamic(() => import("@/components/cocreate/cocreate-app").then((m) => m.CoCreateApp), { ssr: false });
-const AppMarketApp = dynamic(() => import("@/components/app-market/app-market-app").then((m) => m.AppMarketApp), { ssr: false });
-const CustomAppRunner = dynamic(() => import("@/components/app-market/custom-app-runner").then((m) => m.CustomAppRunner), { ssr: false });
 import { hydrateKvDb, kvGet, kvSet, kvRemove, kvKeysWithPrefix } from "@/lib/kv-db";
 import { deleteDatabase } from "@/lib/data-management/idb";
 import { hydrateStoryStorage } from "@/lib/story-storage";
@@ -66,6 +62,7 @@ import {
   PAGE_1_DEFAULT,
   PAGE_2_DEFAULT,
   PAGE_3_DEFAULT,
+  PAGE_4_DEFAULT,
   createFolderIconId,
   isFolderIconId,
   type DesktopIconId,
@@ -135,16 +132,9 @@ import { WidgetRenderer } from "@/components/widgets/widget-renderer";
 import type { DIYWidgetTemplate } from "@/lib/widget-types";
 import { DebugPromptPanel } from "@/components/debug-prompt-panel";
 import { QuickActionFloat } from "@/components/quick-action-float";
-import { FloatingControlDock } from "@/components/floating-control-dock";
-import { QuickNoteFloat } from "@/components/quick-note-float";
-import {
-    CONTROL_DOCK_ACTIVATE_EVENT,
-    getControlDockState,
-    subscribeControlDockState,
-} from "@/lib/floating-controls-store";
 import { CHAT_MESSAGE_PUSHED_EVENT, CHAT_REQUEST_REPLY_EVENT, hydrateChatStorage, loadChatSessions, loadChatMessages, pushChatMessage, type ChatMessage, type ChatSession } from "@/lib/chat-storage";
 import { ensureGlobalBindingDefaults, resolveUserIdentity } from "@/lib/settings-storage";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadChatAppCharacters as loadCharacters } from "@/lib/chat-app-characters";
 import { generateChatCompletion, flattenCompletionResult } from "@/lib/chat-engine";
 import { parseAIResponse } from "@/lib/rich-message-parser";
 import { requestBackgroundChatReply, scheduleFollowUp } from "@/lib/follow-up-service";
@@ -158,6 +148,7 @@ import { WeixinSyncToast } from "@/components/weixin-sync-toast";
 import { sendBrowserNotification } from "@/lib/browser-notification";
 import type { ChatSharePayload } from "@/lib/chat-share";
 import { completePendingMcpOAuthCallback } from "@/lib/tool-executor";
+import { phoneSessionParent } from "@/lib/phone-session-protocol";
 import { LayoutGrid, LoaderCircle, RefreshCw } from "lucide-react";
 
 const EMOJI_FONTS = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla"';
@@ -530,11 +521,11 @@ function normalizeLayout(raw: unknown, widgets: WidgetInstance[], dockIds: Set<D
   for (const folder of Object.values(folders)) {
     for (const memberId of folder.icons) allPlaced.add(memberId);
   }
-  const allDefaults = [...PAGE_1_DEFAULT, ...PAGE_2_DEFAULT, ...PAGE_3_DEFAULT, ...DOCK_DEFAULT];
+  const allDefaults = [...PAGE_1_DEFAULT, ...PAGE_2_DEFAULT, ...PAGE_3_DEFAULT, ...PAGE_4_DEFAULT, ...DOCK_DEFAULT];
 
   for (const id of allDefaults) {
     if (allPlaced.has(id) || dockIds.has(id)) continue;
-    const primaryPage = PAGE_1_DEFAULT.includes(id) ? 1 : PAGE_2_DEFAULT.includes(id) ? 2 : PAGE_3_DEFAULT.includes(id) ? 3 : 1;
+    const primaryPage = PAGE_1_DEFAULT.includes(id) ? 1 : PAGE_2_DEFAULT.includes(id) ? 2 : PAGE_3_DEFAULT.includes(id) ? 3 : PAGE_4_DEFAULT.includes(id) ? 4 : 1;
     // placeIconOnAvailablePage 页满会顺延到下一页乃至新开一页——
     // 曾经这里只在现有页里找空格，页面被图标和组件占满时就静默放弃，
     // 图标（如外观）从此永久丢失且每次重启都救不回
@@ -648,30 +639,6 @@ function readInitialThemeProfile(): ThemeProfile {
     return normalizeThemeProfile(DEFAULT_THEME_PROFILE);
   }
   return readThemeProfile();
-}
-
-type IdleWindow = Window & {
-  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-  cancelIdleCallback?: (handle: number) => void;
-};
-
-/**
- * 把「不参与首屏绘制」的工作推到首帧之后的空闲时段执行。
- * 有 requestIdleCallback 就用它（带超时兜底，最迟 timeout 后必然执行），
- * 否则退回 setTimeout。返回取消函数。
- *
- * 开机瞬间主线程本来就在忙：KV 水合、首屏样式计算、桌面首帧布局。此时再
- * 叠一批 IndexedDB 往返和大字符串展开，用户看到的就是「进桌面卡死几秒」。
- */
-function scheduleIdle(callback: () => void, timeout = 1200): () => void {
-  if (typeof window === "undefined") return () => {};
-  const idleWindow = window as IdleWindow;
-  if (typeof idleWindow.requestIdleCallback === "function") {
-    const handle = idleWindow.requestIdleCallback(callback, { timeout });
-    return () => idleWindow.cancelIdleCallback?.(handle);
-  }
-  const handle = window.setTimeout(callback, 120);
-  return () => window.clearTimeout(handle);
 }
 
 /** Build a boolean grid marking cells occupied by widgets on one page */
@@ -968,7 +935,7 @@ function useAndroidCaretKeyboardLift() {
     }
 
     const mobileMq = window.matchMedia("(max-width: 500px) and (hover: none) and (pointer: coarse)");
-    const viewport = window.visualViewport;
+    const viewport = (phoneSessionParent() ?? window).visualViewport;
     let focusedElement: HTMLElement | null = null;
     let raf = 0;
     let currentLift = 0;
@@ -1188,14 +1155,6 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   }, []);
 
   const [themeAssets, setThemeAssets] = useState<Record<string, string>>(() => initialThemeAssets ?? {});
-  // 已经取回（或已尝试取回）的资产 id 账本。
-  // 开机时 MainApp 已经把首屏要用的那批资产（壁纸/字体/dock 皮肤/激活图标皮肤）
-  // 读好并通过 initialThemeAssets 注入了；若这里不记账，桌面一挂载就会把同一批
-  // 资产连同整个壁纸库再全量读一遍——这就是「进入桌面第一下异常卡顿」的直接来源。
-  const loadedThemeAssetIdsRef = useRef<Set<string>>(new Set(Object.keys(initialThemeAssets ?? {})));
-  // 开机首轮的主题资产补读是否已结算：用来区分「首次开机」和「用户主动换肤」，
-  // 前者可以等到空闲期再读，后者必须立刻可见。
-  const themeAssetBootSettledRef = useRef(false);
   const [slotIconWidth, setSlotIconWidth] = useState<number | null>(null);
   const [slotIconHeight, setSlotIconHeight] = useState<number | null>(null);
   const [slotRowStep, setSlotRowStep] = useState<number | null>(null);
@@ -1852,6 +1811,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
       if (cancelled) return;
       startFollowUpService();
       startMomentsService();
+      startAlbumReviewService();
       startDiaryEntryTimerService();
       const stopWeixinCloudRealtimeSync = startWeixinCloudRealtimeSync();
       servicesStarted = true;
@@ -1870,6 +1830,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
       if (servicesStarted) {
         stopFollowUpService();
         stopMomentsService();
+        stopAlbumReviewService();
         stopDiaryEntryTimerService();
       }
       bgTimerCleanup();
@@ -2026,46 +1987,21 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   }, [desktopReady]);
 
   useEffect(() => {
-    // 只补读「这一轮还没取回过」的资产。首屏那批已由 MainApp 预加载、并作为
-    // initialThemeAssets 注入，这里直接跳过，省掉一次全量 IndexedDB 往返。
-    const pendingIds = collectThemeAssetIds(draftTheme).filter(
-      (id) => !loadedThemeAssetIdsRef.current.has(id)
-    );
-    const isBootSync = !themeAssetBootSettledRef.current;
-    if (pendingIds.length === 0) {
-      themeAssetBootSettledRef.current = true;
+    const ids = collectThemeAssetIds(draftTheme);
+    if (ids.length === 0) {
       return;
     }
 
     let disposed = false;
-    const load = () => {
-      void getThemeAssetMap(pendingIds).then((map) => {
-        if (disposed) return;
-        // 成功后才记账：StrictMode 的「挂载-卸载-再挂载」会走到这里两次，
-        // 提前记账会让这批资产永远读不到。
-        pendingIds.forEach((id) => loadedThemeAssetIdsRef.current.add(id));
-        if (Object.keys(map).length > 0) {
-          setThemeAssets((previous) => ({ ...previous, ...map }));
-        }
-      });
-    };
+    void getThemeAssetMap(ids).then((map) => {
+      if (disposed) {
+        return;
+      }
+      setThemeAssets((previous) => ({ ...previous, ...map }));
+    });
 
-    // 开机首轮补读推后到首帧空闲期（这批资产不参与首屏绘制）；之后的换肤补读
-    // 必须立刻生效，用户点了就要看见。
-    if (!isBootSync) {
-      load();
-      return () => {
-        disposed = true;
-      };
-    }
-
-    themeAssetBootSettledRef.current = true;
-    const cancelIdle = scheduleIdle(load);
     return () => {
       disposed = true;
-      cancelIdle();
-      // 被取消（含 StrictMode 的模拟卸载）时回滚标记，让下一次挂载仍走空闲补读。
-      themeAssetBootSettledRef.current = false;
     };
   }, [draftTheme, themeAssetKey]);
 
@@ -2445,6 +2381,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
   // Allow other components to switch apps via custom event
   const [chatInitSessionId, setChatInitSessionId] = useState<string | null>(null);
+  const [chatFeedsRequest, setChatFeedsRequest] = useState(0);
+  const [chatSessionRequest, setChatSessionRequest] = useState(0);
   const [activeChatSession, setActiveChatSession] = useState<ChatSession | null>(null);
   const [customAppLaunchContext, setCustomAppLaunchContext] = useState<CustomAppLaunchState | null>(null);
   const [appMarketLaunchContext, setAppMarketLaunchContext] = useState<Record<string, unknown> | null>(null);
@@ -2486,13 +2424,13 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
   // Mini chat window state
   const [showMiniChat, setShowMiniChat] = useState(false);
+  const [quickReply, setQuickReply] = useState<{ sessionId: string; title: string } | null>(null);
   const [miniSharePayload, setMiniSharePayload] = useState<ChatSharePayload | null>(null);
   const miniSessionRef = useRef<ChatSession | null>(null);
   const handleMiniChatClose = useCallback(() => setShowMiniChat(false), []);
   const handleMiniChatSessionChange = useCallback((session: ChatSession | null) => {
     miniSessionRef.current = session;
   }, []);
-  const handleMiniShareDone = useCallback(() => setMiniSharePayload(null), []);
   const handleMiniChatExpand = useCallback(() => {
     setShowMiniChat(false);
     musicOverlayControllerRef.current?.closeFullPlayer();
@@ -2511,29 +2449,11 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
     return () => window.removeEventListener("open-mini-chat", handler);
   }, []);
 
-  // 聊天小窗归坞管理：勾选 = 坞按钮可开合，取消勾选 = 小窗彻底隐藏（已打开的也强制关掉）
-  const miniChatInDock = useSyncExternalStore(
-    subscribeControlDockState,
-    () => getControlDockState().pinned["mini-chat"] !== false,
-    () => true,
-  );
-  useEffect(() => {
-    if (!miniChatInDock) setShowMiniChat(false);
-  }, [miniChatInDock]);
-
-  // 受统一控制坞驱动：坞里点「聊天小窗」时切换迷你聊天窗开合
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ control?: string }>).detail;
-      if (detail?.control !== "mini-chat") return;
-      if (!miniChatInDock) return;
-      setShowMiniChat(prev => !prev);
-    };
-    window.addEventListener(CONTROL_DOCK_ACTIVATE_EVENT, handler);
-    return () => window.removeEventListener(CONTROL_DOCK_ACTIVATE_EVENT, handler);
-  }, [miniChatInDock]);
-
   const openChatSessionFromNotice = useCallback((sessionId: string) => {
+    setChatSessionRequest(value => value + 1);
+    setChatFeedsRequest(0);
+    setQuickReply(null);
+    musicOverlayControllerRef.current?.closeFullPlayer();
     if (chatMessageNoticeTimerRef.current !== null) {
       window.clearTimeout(chatMessageNoticeTimerRef.current);
       chatMessageNoticeTimerRef.current = null;
@@ -2618,8 +2538,14 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
   const handleNoticeClick = useCallback(() => {
     if (noticeDragRef.current.far) { noticeDragRef.current.far = false; return; }
-    if (chatMessageNotice) openChatSessionFromNotice(chatMessageNotice.sessionId);
-  }, [chatMessageNotice, openChatSessionFromNotice]);
+    if (!chatMessageNotice) return;
+    if (activeApp === "chat") { openChatSessionFromNotice(chatMessageNotice.sessionId); return; }
+    if (chatMessageNoticeTimerRef.current !== null) window.clearTimeout(chatMessageNoticeTimerRef.current);
+    chatMessageNoticeTimerRef.current = null;
+    setQuickReply({ sessionId: chatMessageNotice.sessionId, title: chatMessageNotice.title });
+    setChatMessageNotice(null);
+    setShowMiniChat(false);
+  }, [chatMessageNotice, activeApp, openChatSessionFromNotice]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -2628,7 +2554,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
       const isCurrentMainChat = activeApp === "chat" && activeChatSession?.id === detail.sessionId;
       const isCurrentMiniChat = showMiniChat && miniSessionRef.current?.id === detail.sessionId;
-      if (isCurrentMainChat || isCurrentMiniChat) return;
+      if (isCurrentMainChat || isCurrentMiniChat || quickReply?.sessionId === detail.sessionId) return;
 
       const sessions = loadChatSessions();
       const session = sessions.find(s => s.id === detail.sessionId);
@@ -2651,7 +2577,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
         sessionId: detail.sessionId,
         title,
         body: detail.body.trim(),
-        avatar: detail.avatar ?? char?.avatar ?? null,
+        avatar: char ? char.avatar : detail.avatar ?? null,
         isGroup,
       });
       chatMessageNoticeTimerRef.current = window.setTimeout(() => {
@@ -2662,7 +2588,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
     window.addEventListener(CHAT_MESSAGE_NOTICE_EVENT, handler);
     return () => window.removeEventListener(CHAT_MESSAGE_NOTICE_EVENT, handler);
-  }, [activeApp, activeChatSession?.id, showMiniChat]);
+  }, [activeApp, activeChatSession?.id, showMiniChat, quickReply?.sessionId]);
 
   useEffect(() => {
     return () => {
@@ -3805,6 +3731,9 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
     // 初始检测（延迟让 app 渲染完毕）
     detect();
+    // Refresh the browser canvas before opening the software keyboard, too.
+    const onKeyboardFocus = () => { void updateStatusBarTone(shell, activeApp); };
+    shell.addEventListener("focusin", onKeyboardFocus);
 
     // 监听 workspace 内 DOM 变化（如：进入聊天室、切换子页面）
     // 修复：仅当进入 App 时才监听，防止桌面组件（如时钟秒针更新）疯狂触发画布亮度计算导致严重发烫
@@ -3813,13 +3742,17 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
       const workspace = shell.querySelector(".phone-workspace");
       if (workspace) {
         observer = new MutationObserver(detect);
-        observer.observe(workspace, { childList: true, subtree: true });
+        observer.observe(workspace, {
+          childList: true, subtree: true, attributes: true,
+          attributeFilter: ["data-chat-dark", "data-has-bg-image"],
+        });
       }
     }
 
     return () => {
       clearTimeout(debounceTimer);
       observer?.disconnect();
+      shell.removeEventListener("focusin", onKeyboardFocus);
     };
   }, [
     activeApp,
@@ -4071,8 +4004,11 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
             setActiveApp(null);
             setActiveChatSession(null);
             setChatInitSessionId(null);
+            setChatFeedsRequest(0);
           }}
           initialSessionId={chatInitSessionId}
+          feedsRequest={chatFeedsRequest}
+          sessionRequest={chatSessionRequest}
           onSessionChange={setActiveChatSession}
         />
       );
@@ -4126,6 +4062,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
     if (activeApp === "music") {
       return <MusicApp onClose={() => setActiveApp(null)} />;
+    }
+
+    if (activeApp === "photos") {
+      return <PhotoAlbumApp onClose={() => setActiveApp(null)} />;
     }
 
     if (activeApp === "calendar") {
@@ -4255,6 +4195,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
               } as React.CSSProperties}
             >
               <div className="phone-wallpaper" style={wallpaperStyle} />
+              <EdgeSwipeBack />
 
               <header className="phone-status-bar">
                 <StatusClock />
@@ -4531,19 +4472,29 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                 onControllerChange={handleMusicOverlayControllerChange}
               />
 
+              {showMiniChat && miniSharePayload && <ShareDestinationSheet payload={miniSharePayload} onClose={() => { setShowMiniChat(false); setMiniSharePayload(null); }} onView={destination => {
+                setShowMiniChat(false); setMiniSharePayload(null);
+                if (destination !== "moments") { setChatFeedsRequest(0); openChatSessionFromNotice(destination); return; }
+                setQuickReply(null);
+                musicOverlayControllerRef.current?.closeFullPlayer();
+                setChatInitSessionId(null);
+                setChatFeedsRequest(value => value + 1);
+                setActiveApp("chat" as IconId);
+              }} />}
+              {quickReply && <QuickReplyWindow key={quickReply.sessionId} sessionId={quickReply.sessionId} title={quickReply.title}
+                onClose={() => setQuickReply(null)} onExpand={() => openChatSessionFromNotice(quickReply.sessionId)} />}
+
               {/* Mini chat window — persists across music pages */}
               <MiniAppWindow
                 title="聊天"
-                visible={showMiniChat && miniChatInDock}
+                visible={showMiniChat && !miniSharePayload}
                 onClose={handleMiniChatClose}
                 onExpand={handleMiniChatExpand}
               >
-                <PhoneChatApp
+                {!quickReply && <PhoneChatApp
                   onClose={handleMiniChatClose}
                   onSessionChange={handleMiniChatSessionChange}
-                  sharePayload={miniSharePayload}
-                  onShareDone={handleMiniShareDone}
-                />
+                />}
               </MiniAppWindow>
 
               <div
@@ -4906,8 +4857,6 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
               ) : null}
               <DebugPromptPanel />
               <QuickActionFloat />
-              <FloatingControlDock activeApp={activeApp} />
-              <QuickNoteFloat />
               <MascotFloat />
               {/* 预览弹窗宿主：独立于桌宠的展开/收起状态，否则桌宠收成小球时弹不出来 */}
               <MascotPreviewHost />

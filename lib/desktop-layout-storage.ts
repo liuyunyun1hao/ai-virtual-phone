@@ -1,4 +1,4 @@
-import { DOCK_DEFAULT, ICONS, PAGE_1_DEFAULT, PAGE_2_DEFAULT, PAGE_3_DEFAULT, type DesktopIconId, type IconId, type IconPosition } from "@/lib/desktop-config";
+import { DOCK_DEFAULT, ICONS, PAGE_1_DEFAULT, PAGE_2_DEFAULT, PAGE_3_DEFAULT, PAGE_4_DEFAULT, type DesktopIconId, type IconId, type IconPosition } from "@/lib/desktop-config";
 import { isCustomAppIconId } from "@/lib/custom-app-types";
 import { loadInstalledCustomApps } from "@/lib/custom-app-storage";
 import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, type WidgetInstance } from "@/lib/widget-types";
@@ -114,6 +114,11 @@ export function createDefaultDesktopIconLayout(_widgets: WidgetInstance[] = []):
       id,
       row: 4 + Math.floor(i / 2),
       col: 3 + (i % 2),
+    })),
+    page4: PAGE_4_DEFAULT.map((id, i) => ({
+      id,
+      row: 5 + Math.floor(i / GRID_COLS),
+      col: (i % GRID_COLS) + 1,
     })),
   } as DesktopIconLayout;
 }

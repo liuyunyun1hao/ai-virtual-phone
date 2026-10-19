@@ -1,6 +1,7 @@
 // components/music/music-app.tsx — Music App main page (immersive, no PageShell)
 "use client";
 
+import { ChevronLeft, Settings } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import {
     loadAllTracks, saveTrack, deleteTrack,
@@ -31,10 +32,10 @@ import {
     MUSIC_BG_EVENT, type MusicBgConfig, type MusicPlayerBgMode,
 } from "@/lib/music-bg";
 
-type Props = { onClose: () => void };
+type Props = { onClose: () => void; headerAccessory?: React.ReactNode };
 type TabId = "recommend" | "mine" | "search" | "local";
 
-export default function MusicApp({ onClose }: Props) {
+export default function MusicApp({ onClose, headerAccessory }: Props) {
     const [tracks, setTracks] = useState<MusicTrack[]>([]);
     const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState<TabId>("local");
@@ -301,23 +302,20 @@ export default function MusicApp({ onClose }: Props) {
                         else if (activePlaylist) { setActivePlaylist(null); }
                         else { onClose(); }
                     }} title="返回">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="15 18 9 12 15 6" />
-                        </svg>
+                        <ChevronLeft size={28} strokeWidth={1.9} aria-hidden="true" />
                     </button>
                 </div>
                 <div className="music-header-title">
-                    {dailyView ? "每日推荐" : activePlaylist && tab === "recommend" ? "歌单详情" : tab === "recommend" ? "" : tab === "search" ? "搜索" : tab === "mine" ? "我的" : "本地音乐"}
+                    {dailyView ? "每日推荐" : activePlaylist && tab === "recommend" ? "歌单详情" : tab === "recommend" ? "音乐" : tab === "search" ? "搜索" : tab === "mine" ? "我的" : "本地音乐"}
                 </div>
                 <div className="music-header-right">
                     <button className="music-header-action" onClick={() => setShowSettings(true)} title="设置">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                        </svg>
+                        <Settings size={25} strokeWidth={1.8} aria-hidden="true" />
                     </button>
                 </div>
             </div>
 
+            {headerAccessory}
             {/* Tab content */}
             {tab === "recommend" && hasNetease && (dailyView ? (
                 <DailySongsPage
@@ -418,12 +416,6 @@ export default function MusicApp({ onClose }: Props) {
             <div className="music-bottom-dock">
             {player.currentTrack && (
                 <div className="music-now-bar" onClick={player.openFullPlayer}>
-                    <div className="music-birds">
-                        <img src="/birds/小鸟1.png" className="music-bird bird-1" alt="bird" />
-                        <img src="/birds/小鸟2.png" className="music-bird bird-2" alt="bird" />
-                        <img src="/birds/小鸟3.png" className="music-bird bird-3" alt="bird" />
-                        <img src="/birds/小鸟4.png" className="music-bird bird-4" alt="bird" />
-                    </div>
                     <div className="music-now-bar-cover" {...(player.isPlaying ? { "data-playing": "" } : {})}>
                         {player.currentTrack.coverUrl ? (
                             <img src={player.currentTrack.coverUrl} alt="" />
@@ -1497,6 +1489,7 @@ function PlaylistsTab({ player, formatTime, onPlayNetease, onPlayAll, activePlay
 
 // ── Settings Tab ──
 function MusicSettingsTab({ onBack, onSaved }: { onBack: () => void; onSaved: () => void }) {
+    const player = useMusicControls();
     const [config, setConfig] = useState<MusicApiConfig>(() => loadMusicApiConfig());
     const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
     const [testing, setTesting] = useState(false);
@@ -1666,8 +1659,15 @@ function MusicSettingsTab({ onBack, onSaved }: { onBack: () => void; onSaved: ()
 
             <div className="music-settings-body">
                 <div className="music-settings-section">
+                    <div className="music-settings-label">悬浮播放器</div>
+                    <div className="music-settings-hint">关闭后音乐继续播放，桌面组件仍可控制。选择自动保存。</div>
+                    <button className="music-settings-btn" role="switch" aria-label="悬浮播放器" aria-checked={player.floatEnabled} onClick={() => player.setFloatEnabled(!player.floatEnabled)}>
+                        {player.floatEnabled ? "已开启 · 点击关闭" : "已关闭 · 点击开启"}
+                    </button>
+                </div>
+                <div className="music-settings-section">
                     <div className="music-settings-label">网易云 API 地址</div>
-                    <div className="music-settings-hint">默认使用公共服务，也可以改成自己的 NeteaseCloudMusicApi 地址</div>
+                    <div className="music-settings-hint">填写自己的 NeteaseCloudMusicApi 地址；留空时使用部署者配置的地址（若有）</div>
                     <input
                         className="music-settings-input"
                         placeholder="https://your-api.vercel.app"

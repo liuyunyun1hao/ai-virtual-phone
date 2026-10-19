@@ -3,20 +3,9 @@
 // request headers, and response parsing. All LLM-calling modules should use these.
 
 import type { ApiConfig } from "./settings-types";
-import { sendLlmRequest } from "./llm-http";
 import { pushApiLog } from "./api-log-store";
-import { recordLlmSpend, type LlmUsageLike } from "./api-accounts";
 
 const SIMPLE_ANTHROPIC_AUTO_MAX_TOKENS = 8192;
-
-/** 后台辅助调用（记忆总结 / 朋友圈 / 日历等）同样按单价扣所属账户；失败不影响主流程 */
-function chargeSimpleCall(config: ApiConfig, usage?: LlmUsageLike): void {
-    try {
-        recordLlmSpend(config, usage);
-    } catch (error) {
-        console.warn("[api-helpers] 自动扣费失败（不影响本次调用）", error);
-    }
-}
 
 /**
  * Resolve the base URL for an API config.
@@ -111,6 +100,24 @@ export async function simpleLLMCall(
     messages: { role: string; content: string }[],
     options?: { temperature?: number; max_tokens?: number; signal?: AbortSignal; label?: string },
 ): Promise<{ content: string | null; error?: string; finishReason?: string; wasTruncated?: boolean }> {
+    const { registerIdentityRequest, assertIdentityActive } = await import("./identity-runtime");
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (options?.signal?.aborted) abort();
+    else options?.signal?.addEventListener("abort", abort, { once: true });
+    const release = registerIdentityRequest(controller);
+    try {
+      return await simpleLLMCallForIdentity(config, messages, { ...options, signal: controller.signal });
+    } finally { release(); options?.signal?.removeEventListener("abort", abort); }
+}
+
+async function simpleLLMCallForIdentity(
+    config: ApiConfig,
+    messages: { role: string; content: string }[],
+    options?: { temperature?: number; max_tokens?: number; signal?: AbortSignal; label?: string },
+): Promise<{ content: string | null; error?: string; finishReason?: string; wasTruncated?: boolean }> {
+    const { assertIdentityActive } = await import("./identity-runtime");
+    assertIdentityActive();
     const baseUrl = determineBaseUrl(config);
     if (!baseUrl || !config.apiKey) {
         return { content: null, error: "API 地址或密钥无效" };
@@ -171,7 +178,7 @@ export async function simpleLLMCall(
         const bodyTokenEstimate = Math.ceil(bodySize / 3);
         console.log("[simpleLLMCall] Request:", { url: fetchUrl.slice(0, 80), bodySize, bodyTokenEstimate, model: config.defaultModel });
 
-        const res = await sendLlmRequest(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
+        const res = await fetch(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
 
         if (!res.ok) {
             const errText = await res.text().catch(() => "");
@@ -187,6 +194,7 @@ export async function simpleLLMCall(
         }
 
         const data = await res.json();
+        assertIdentityActive();
 
         // Extract content — try multiple response formats for maximum compatibility
         const content = extractLLMContent(data, config.provider);
@@ -205,8 +213,6 @@ export async function simpleLLMCall(
                 "Full:", JSON.stringify(data).slice(0, 500));
             return { content: null, error: describeEmptyLLMResponse(data, finishReason, wasTruncated, config), finishReason, wasTruncated };
         }
-
-        chargeSimpleCall(config, extractUsage(data));
 
         return { content, finishReason, wasTruncated };
     } catch (err) {

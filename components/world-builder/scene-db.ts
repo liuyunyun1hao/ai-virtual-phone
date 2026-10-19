@@ -1,3 +1,4 @@
+import { identityIndexedDbFactory, identityDatabaseName, assertIdentityActive } from "@/lib/identity-runtime";
 /**
  * 筑境 — 场景存档 IndexedDB 存储
  * 保存时自动嵌入用户导入模型的 blob 数据
@@ -27,7 +28,7 @@ function ensureStore(db: IDBDatabase): void {
 
 function openDBVersion(version?: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
+    const req = version ? identityIndexedDbFactory().open(identityDatabaseName(DB_NAME), version) : identityIndexedDbFactory().open(identityDatabaseName(DB_NAME));
     req.onupgradeneeded = () => {
       ensureStore(req.result);
     };
@@ -72,6 +73,7 @@ export async function saveScene(name: string, objects: SceneObject[], existingId
     updatedAt: now,
   };
   return new Promise((resolve, reject) => {
+    assertIdentityActive();
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).put(record);
     tx.oncomplete = () => resolve(id);
@@ -124,6 +126,7 @@ export async function getAllScenes(): Promise<SavedScene[]> {
 export async function deleteScene(id: string): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
+    assertIdentityActive();
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).delete(id);
     tx.oncomplete = () => resolve();

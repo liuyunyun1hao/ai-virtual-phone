@@ -216,12 +216,15 @@ export async function serializeStorageString(value: string, collector?: MediaCol
  * are returned byte-for-byte so ordinary settings JSON is never reformatted. */
 export async function deserializeStorageString(value: string, resolver?: MediaResolver): Promise<string> {
   if (!resolver || !/"__aiPhoneMediaRef"\s*:/.test(value)) return value;
+  let parsed: unknown;
   try {
-    const restored = await deserializeValue(JSON.parse(value), resolver);
-    return typeof restored === "string" ? restored : JSON.stringify(restored);
+    parsed = JSON.parse(value);
   } catch {
     return value;
   }
+  // A failed download must skip/report this record, never persist unresolved markers.
+  const restored = await deserializeValue(parsed, resolver);
+  return typeof restored === "string" ? restored : JSON.stringify(restored);
 }
 
 // 纯算术估算 UTF-8 字节数：逐字符累加，零内存分配。

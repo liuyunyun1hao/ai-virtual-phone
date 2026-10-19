@@ -1,3 +1,5 @@
+import { phoneSessionParent } from "./phone-session-protocol";
+
 export type PwaDisplayPreference = "fullscreen" | "standalone";
 export type RuntimePwaDisplayMode = "fullscreen" | "standalone" | "minimal-ui" | "browser";
 export type PwaHostedSurface = "custom-app" | "game";
@@ -60,17 +62,18 @@ export function shouldRequestPwaFullscreen(): boolean {
 
 export function getRuntimePwaDisplayMode(): RuntimePwaDisplayMode {
   if (typeof window === "undefined" || typeof document === "undefined") return "browser";
-  if (document.fullscreenElement || window.matchMedia("(display-mode: fullscreen)").matches) {
+  const surface = phoneSessionParent() ?? window;
+  if (surface.document.fullscreenElement || surface.matchMedia("(display-mode: fullscreen)").matches) {
     return "fullscreen";
   }
-  if (window.matchMedia("(display-mode: standalone)").matches) {
+  if (surface.matchMedia("(display-mode: standalone)").matches) {
     return "standalone";
   }
-  if (window.matchMedia("(display-mode: minimal-ui)").matches) {
+  if (surface.matchMedia("(display-mode: minimal-ui)").matches) {
     return "minimal-ui";
   }
 
-  const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };
+  const navigatorWithStandalone = surface.navigator as Navigator & { standalone?: boolean };
   return navigatorWithStandalone.standalone ? "standalone" : "browser";
 }
 

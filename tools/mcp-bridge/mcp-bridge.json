@@ -1,8 +1,0 @@
-{
-  "port": 9377,
-  "_说明": "upstream 改成你自己的 MCP 地址即可；键名（xinchao/ob）会变成 URL 路径",
-  "servers": {
-    "xinchao": { "upstream": "http://127.0.0.1:18110", "label": "心潮" },
-    "ob": { "upstream": "http://127.0.0.1:18001", "label": "Ombre Brain" }
-  }
-}

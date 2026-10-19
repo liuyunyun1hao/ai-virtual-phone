@@ -33,17 +33,6 @@ export type PromptOrderEntry = {
     enabled: boolean;
 };
 
-export type GenerationParameterKey =
-    | "temperature"
-    | "top_p"
-    | "top_k"
-    | "min_p"
-    | "top_a"
-    | "repetition_penalty"
-    | "frequency_penalty"
-    | "presence_penalty"
-    | "max_tokens";
-
 export type Prompt = {
     identifier: string;
     name: string;
@@ -76,11 +65,6 @@ export type PresetConfig = SettingItemMeta & {
     repetition_penalty: number;
     openai_max_tokens: number;
     openai_max_context: number;
-    /**
-     * Explicit allow-list of generation parameters sent to model providers.
-     * Undefined keeps legacy behavior so existing/imported presets remain compatible.
-     */
-    enabled_generation_parameters?: GenerationParameterKey[];
     top_a?: number;
     min_p?: number;
     wrap_in_quotes?: boolean;
@@ -142,26 +126,9 @@ export type RegexConfig = SettingItemMeta & {
 };
 
 // --- ApiConfig (migrated from api-settings.tsx) ---
-
-/**
- * API 计价方式（单价由用户手写，本项目不做任何价格推断）：
- * - per_call      按次：每调用一次扣 amount
- * - per_1k_tokens 按量：每 1K token 扣 amount
- * - manual        仅参考：记一笔时只把 amount 当默认值带出来，实际金额由用户填
- */
-export type ApiPricingMode = "per_call" | "per_1k_tokens" | "manual";
-
-export type ApiPricing = {
-    mode: ApiPricingMode;
-    /** 单价（额度）：per_call 为每次；per_1k_tokens 为每 1K token；manual 为参考值 */
-    amount: number;
-};
-
 export type ApiConfig = {
     id: string;
     name?: string;
-    /** 所属 API 文件夹 id；为空表示「未分组」 */
-    groupId?: string;
     provider: string;
     apiKey: string;
     baseUrl?: string;
@@ -170,59 +137,6 @@ export type ApiConfig = {
     enableImageRecognition: boolean;
     enableImageGeneration: boolean;
     preventEmptyGenerateRambling?: boolean;
-    /** 是否启用流式调用（默认 true；关闭后所有使用该配置的会话一律走非流式请求） */
-    enableStreaming?: boolean;
-    /** 手动填写的计价信息，用于「记一笔」时自动算钱 */
-    pricing?: ApiPricing;
-};
-
-// --- ApiGroup：API 文件夹，用于把同一站点的多个配置收纳在一起 ---
-export type ApiGroup = {
-    id: string;
-    name: string;
-    /** 在列表里是否折叠（快捷菜单与设置页共用同一状态） */
-    collapsed?: boolean;
-    createdAt?: number;
-};
-
-// --- ApiAccount：一个 API 文件夹就是一本账（余额由用户手动维护） ---
-export type ApiAccount = {
-    /** 与 ApiConfig.groupId 对应；空串 = 未分组账户。删文件夹不会删账户，账目保留 */
-    id: string;
-    /** 剩余额度 */
-    balance: number;
-    /** 低额度提醒阈值（额度）；<=0 或缺省表示不提醒 */
-    lowThreshold?: number;
-    note?: string;
-    /** 调用成功后按单价自动扣费（默认 true；关掉后只能用「记一笔」手动扣） */
-    autoCharge?: boolean;
-    /**
-     * 自动扣费的记账口径：
-     * - `per_call`（默认）：**每一次真实调用各记一笔** —— 账本最贴近中转站的真实消耗；
-     * - `per_task`：一次任务（如卷宝一次 agent loop 内的多轮调用）只扣一次单价 ——
-     *   这是把单价当「任务包价」用，账本会比真实消耗宽松，需要自己清楚这一点。
-     */
-    billingMode?: "per_call" | "per_task";
-    updatedAt?: number;
-};
-
-export type ApiLedgerKind = "spend" | "topup" | "set";
-
-/** 账目流水：一次扣费 / 一笔充值 / 一次手动改余额 */
-export type ApiLedgerEntry = {
-    id: string;
-    /** 所属账户（= 文件夹 id，空串表示未分组账户） */
-    accountId: string;
-    /** 关联的 API 配置 */
-    configId?: string;
-    configName?: string;
-    kind: ApiLedgerKind;
-    /** 变动额度（恒为正数；kind 决定方向） */
-    amount: number;
-    /** 变动后的余额快照 */
-    balanceAfter: number;
-    note?: string;
-    createdAt: number;
 };
 
 // --- VoiceApiConfig (migrated from voice-settings.tsx) ---
@@ -237,43 +151,18 @@ export type VoiceApiConfig = {
     sttModel?: string;
     defaultVoice: string;
     languageBoost?: string;
-    /** Minimax voice_setting.speed. Missing values keep the legacy 1.0x behavior. */
+    /** Provider-specific speed: Minimax 0.5–2, ElevenLabs 0.7–1.2. */
     speechSpeed?: number;
+    elevenLabs?: { stability?: number; similarity?: number; style?: number; speakerBoost?: boolean; languageCode?: string };
     /** Minimax voice_setting.pitch（半音，±12）。缺省保持旧行为（0，原声）。 */
     speechPitch?: number;
-    /** ElevenLabs voice_settings.stability（0~1，默认 0.5）。越低越有起伏。 */
-    stability?: number;
-    /** ElevenLabs voice_settings.similarity_boost（0~1，默认 0.75）。 */
-    similarityBoost?: number;
-    /** ElevenLabs voice_settings.style（0~1，默认 0）。调高会更"演"。 */
-    styleExaggeration?: number;
-    /** ElevenLabs 输出格式（查询参数 output_format，默认 mp3_44100_128）。 */
-    outputFormat?: string;
-    /** 送合成前先用模型把台词改写成配音脚本（加呼吸/动作标签）。 */
-    enableTtsRewrite?: boolean;
-    /** 改写用哪个 API 配置；不填就用第一个。 */
-    rewriteApiConfigId?: string;
     customVoices?: { id: string; name: string; createdAt?: number }[];
     enableSTT: boolean;
     enableTTS: boolean;
 };
 
 // --- Image Generation ---
-export type ImageGenerationProvider = "openai" | "novelai";
-
 export type ImageGenerationRequestMode = "server" | "direct";
-
-export type OpenAiImagePreset = {
-    id: string;
-    name: string;
-    requestMode: ImageGenerationRequestMode;
-    apiKey: string;
-    baseUrl: string;
-    model: string;
-    size: string;
-    quality: string;
-    extraPrompt: string;
-};
 
 export type ImageHostingProvider = "none" | "imgbb";
 
@@ -286,43 +175,15 @@ export type ImageHostingSettings = {
     allowMascotUpload: boolean;
 };
 
-export type NovelAiPreset = {
-    id: string;
-    name: string;
-    model: string;
-    resolution: string; // e.g. "832x1216", "1216x832", "1024x1024", "1024x1536"
-    steps: number;
-    scale: number;
-    sampler: string; // e.g. "k_euler", "k_dpmpp_2m", "k_euler_ancestral"
-    noiseSchedule?: string; // e.g. "karras", "native", "exponential"
-    positivePrompt: string; // 画师串 / 风格 / 质量正向词
-    negativePrompt: string; // 负面提示词 / undesired content
-    qualityToggle?: boolean;
-    smea?: boolean;
-    smeaDyn?: boolean;
-};
-
-export type NovelAiSettings = {
-    apiKey: string;
-    activePresetId: string;
-    presets: NovelAiPreset[];
-};
-
 export type ImageGenerationSettings = {
     enabled: boolean;
-    provider?: ImageGenerationProvider;
     requestMode: ImageGenerationRequestMode;
-    // OpenAI 模式配置（旧字段保留用于兼容迁移）
     apiKey: string;
     baseUrl: string;
     model: string;
     size: string;
     quality: string;
     extraPrompt: string;
-    openaiPresets?: OpenAiImagePreset[];
-    activeOpenAiPresetId?: string;
-    // NovelAI 模式配置
-    novelai?: NovelAiSettings;
     characterReferences: Record<string, {
         assetId: string;
         updatedAt: number;

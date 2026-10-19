@@ -1,11 +1,13 @@
 "use client";
+import { identityLocalStorage } from "@/lib/identity-runtime";
+
 
 const CALL_STT_WARNING_HIDDEN_KEY = "ai_phone_call_stt_warning_hidden_v1";
 
 export function isCallSttWarningHidden(): boolean {
     if (typeof window === "undefined") return false;
     try {
-        return window.localStorage.getItem(CALL_STT_WARNING_HIDDEN_KEY) === "1";
+        return identityLocalStorage.getItem(CALL_STT_WARNING_HIDDEN_KEY) === "1";
     } catch {
         return false;
     }
@@ -14,7 +16,7 @@ export function isCallSttWarningHidden(): boolean {
 export function hideCallSttWarningPermanently() {
     if (typeof window === "undefined") return;
     try {
-        window.localStorage.setItem(CALL_STT_WARNING_HIDDEN_KEY, "1");
+        identityLocalStorage.setItem(CALL_STT_WARNING_HIDDEN_KEY, "1");
     } catch {
         // Ignore storage failures; the prompt can still be closed for this session.
     }

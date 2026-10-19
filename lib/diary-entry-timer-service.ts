@@ -1,5 +1,5 @@
 import { bgSetInterval } from "./bg-timer";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { Character } from "./character-types";
 import { generateDiaryEntryForCharacter } from "./diary-entry-engine";
 import {

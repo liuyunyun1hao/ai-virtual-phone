@@ -1,4 +1,6 @@
 "use client";
+import { identityLocalStorage } from "@/lib/identity-runtime";
+
 
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from "react";
 import { Bot, ChevronDown, ChevronRight, Languages, Menu, Minus, PenLine, Rocket, SendHorizontal, X, ZoomIn } from "lucide-react";
@@ -20,7 +22,7 @@ import {
 import { generateAnnotationBatch, generateReadingChat, parseReadingDiscussResponse, type ReadingDiscussAction, type ReadingDiscussContext } from "@/lib/reading-engine";
 import { loadChatMessages, pushChatMessage, deleteChatMessage, editChatMessage, loadChatContacts, createOrGetSession, isReadingDiscussMessage } from "@/lib/chat-storage";
 import type { ChatMessage, ChatSession } from "@/lib/chat-storage";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import { parseAIResponse } from "@/lib/rich-message-parser";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ContentDialog } from "@/components/ui/modal";
@@ -260,7 +262,7 @@ export function ReadingViewer({ book, onBack }: Props) {
     const [chatExpanded, setChatExpanded] = useState(false);
     const [chatOffset, setChatOffset] = useState<{ x: number; y: number }>(() => {
         try {
-            const raw = localStorage.getItem(CHAT_FLOAT_POS_KEY);
+            const raw = identityLocalStorage.getItem(CHAT_FLOAT_POS_KEY);
             if (!raw) return { x: 0, y: 0 };
             const parsed = JSON.parse(raw) as { x?: unknown; y?: unknown };
             if (typeof parsed.x === "number" && typeof parsed.y === "number" && Number.isFinite(parsed.x) && Number.isFinite(parsed.y)) {
@@ -1595,7 +1597,7 @@ export function ReadingViewer({ book, onBack }: Props) {
 
     const persistChatFloatPos = (offset: { x: number; y: number }) => {
         try {
-            localStorage.setItem(CHAT_FLOAT_POS_KEY, JSON.stringify(clampChatOffset(offset)));
+            identityLocalStorage.setItem(CHAT_FLOAT_POS_KEY, JSON.stringify(clampChatOffset(offset)));
         } catch {
             // ignore storage errors
         }
@@ -1625,7 +1627,7 @@ export function ReadingViewer({ book, onBack }: Props) {
         const onResetPos = () => {
             setChatOffset({ x: 0, y: 0 });
             try {
-                localStorage.setItem(CHAT_FLOAT_POS_KEY, JSON.stringify({ x: 0, y: 0 }));
+                identityLocalStorage.setItem(CHAT_FLOAT_POS_KEY, JSON.stringify({ x: 0, y: 0 }));
             } catch {
                 // ignore storage errors
             }

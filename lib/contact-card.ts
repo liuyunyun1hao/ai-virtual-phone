@@ -4,7 +4,7 @@
 // 名片消息只存名字（contactCardName），渲染时实时解析——这样未建档的
 // 名片在用户现场生成档案后，所有同名旧名片自动变为可添加状态。
 
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { loadChatContacts, loadChatMessages, type ChatMessage } from "./chat-storage";
 import { loadCharacterWorldGroups } from "./character-world-storage";
 import type { Character } from "./character-types";

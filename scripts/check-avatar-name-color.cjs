@@ -1,0 +1,28 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ts = require('typescript');
+const source = fs.readFileSync(path.join(__dirname, '../lib/avatar-name-color.ts'), 'utf8');
+const context = { exports: {}, setTimeout, clearTimeout };
+vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
+const { pickAvatarNameColor: pick, DEFAULT_AVATAR_NAME_COLOR: gray } = context.exports;
+const pixels = (rgb, n = 100) => Array.from({ length: n }, () => [...rgb, 255]).flat();
+assert.equal(pick([]), gray);
+assert.equal(pick(pixels([0, 0, 0])), gray);
+assert.equal(pick(pixels([255, 255, 255])), gray);
+assert.equal(pick(pixels([128, 128, 128])), gray);
+assert.equal(pick([255, 0, 0, 0]), gray);
+assert.equal(pick([...pixels([30, 30, 30]), ...pixels([0, 0, 255], 1)]), gray);
+const colors = [[210, 55, 65], [30, 110, 220], [30, 170, 80], [210, 160, 20], [150, 65, 180]].map(rgb => {
+    const color = pick(pixels(rgb));
+    assert.notEqual(color, gray);
+    const channels = color.match(/\d+/g).map(Number);
+    const linear = channels.map(v => v / 255 <= .04045 ? v / 255 / 12.92 : ((v / 255 + .055) / 1.055) ** 2.4);
+    assert.ok(1.05 / (.2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2] + .05) >= 4.5);
+    assert.equal(pick(pixels(rgb)), color);
+    return color;
+});
+assert.equal(new Set(colors).size, 5);
+assert.equal(pick([...pixels([0, 0, 0], 80), ...pixels([210, 55, 65], 20)]), colors[0]);
+console.log('Avatar name color: neutral/transparent fallback, dominant color, stable output and white contrast passed.', colors);

@@ -1,5 +1,6 @@
+import { identityDatabaseName } from "./identity-runtime";
+import { protectIdentityDatabase } from "./identity-db-guard";
 import Dexie from "dexie";
-import { createId } from "./id-utils";
 
 // ── Database ─────────────────────────────────────
 
@@ -15,7 +16,8 @@ class MediaCacheDatabase extends Dexie {
     entries!: Dexie.Table<MediaCacheEntry, string>;
 
     constructor() {
-        super("AiPhoneMediaCacheDB");
+        super(identityDatabaseName("AiPhoneMediaCacheDB"));
+        protectIdentityDatabase(this, "AiPhoneMediaCacheDB");
         this.version(1).stores({
             entries: "id, createdAt",
         });
@@ -86,8 +88,11 @@ export function detectMediaType(b64: string, declaredMime?: string): { mime: str
 
 export const MEDIA_STORE_PROTOCOL = "media-store://";
 
-export async function storeMediaBlob(blob: Blob, mimeType: string, category: MediaCacheEntry["mediaCategory"]): Promise<string> {
-    const id = createId("mc");
+function generateId(): string {
+    return `mc_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export async function storeMediaBlob(blob: Blob, mimeType: string, category: MediaCacheEntry["mediaCategory"], id = generateId()): Promise<string> {
     await getDb().entries.put({ id, blob, mimeType, mediaCategory: category, createdAt: Date.now() });
     return `${MEDIA_STORE_PROTOCOL}${id}`;
 }

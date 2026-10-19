@@ -38,7 +38,7 @@ function SolidBackIcon({ size = 17 }: { size?: number }) {
 import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import { Avatar } from "@/components/ui/primitives";
 import { StoryHtmlRenderer } from "@/components/ui/story-html-renderer";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import { maybeRunSummarization } from "@/lib/memory-summarizer";
 import { incrementEventCounter } from "@/lib/memory-storage";
 import { resolveUserIdentity } from "@/lib/settings-storage";

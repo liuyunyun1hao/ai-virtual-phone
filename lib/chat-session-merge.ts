@@ -3,7 +3,7 @@
 // 合并 = 线上消息 + 线下记录全部并入最近活跃的那个会话，其余会话走一站式删除。
 // 用户可以按组选择合并或保留；选了「不合并」的组记签名，成员不变就不再提醒。
 
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { getLastChatOfflineTurn, loadChatOfflineTurns, saveChatOfflineTurns } from "./chat-offline-storage";
 import { removeChatSessionCompletely } from "./chat-session-remove";
 import {

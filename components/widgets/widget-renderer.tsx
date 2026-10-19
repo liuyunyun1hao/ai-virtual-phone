@@ -11,6 +11,7 @@ import { getMascotState, activateMascot, subscribeMascot } from "@/lib/mascot-st
 import { getMascotSettingsSnapshot, resolveMascotImageRef, subscribeMascotSettings } from "@/lib/mascot-settings";
 import { loadDIYTemplates } from "@/lib/widget-storage";
 import { DIYWidgetRenderer } from "@/components/widgets/diy-widget-renderer";
+import { LiveMusicWidget } from "@/components/widgets/live-music-widget";
 
 const DEFAULT_WHITE_IMAGE =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><rect width="400" height="400" fill="transparent"/></svg>';
@@ -59,7 +60,6 @@ export function WidgetRenderer({ widget, preview, onConfigChange }: WidgetRender
           onConfigChange={onConfigChange}
         />
       </div>
-      {!preview && <span className="widget-label">widgets</span>}
     </div>
   );
 }
@@ -88,6 +88,10 @@ function WidgetContent({
 
   const props = { config, widgetId, onConfigChange, preview };
   switch (type) {
+    case "liveMusicSquare":
+      return <LiveMusicWidget {...props} />;
+    case "liveMusicWide":
+      return <LiveMusicWidget wide {...props} />;
     case "music":
       return <MusicWidget config={config} widgetId={widgetId} onConfigChange={onConfigChange} />;
     case "calendar":

@@ -1,4 +1,4 @@
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { previewMessagesForApi, sendLLMRequest, sendLLMStreamRequest, sendLLMToolRequest, sendLLMToolStreamRequest, ChatEngineError } from "./chat-engine";
 import type { ChatMessage } from "./chat-storage";
 import { assemblePromptPayload } from "./llm-prompt-assembler";
@@ -554,7 +554,7 @@ export async function generateCoCreateReply(
     let cleanOutput = "";
     let toolCalls: CoCreateToolCall[] = [];
 
-    if (workingSession.settings.streamingEnabled && runtime.apiConfig.enableStreaming !== false) {
+    if (workingSession.settings.streamingEnabled) {
       let streamedRaw = "";
       let processedIndex = 0;
       let streamVisibleText = "";

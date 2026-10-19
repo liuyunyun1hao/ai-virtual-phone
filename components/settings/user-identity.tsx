@@ -6,10 +6,13 @@ import { SettingsContext } from "../phone-settings-app";
 import { loadUserIdentities, saveUserIdentities } from "@/lib/settings-storage";
 import { Input } from "@/components/ui/form";
 import { ConfirmDialog } from "@/components/ui/modal";
+import { deletePhoneIdentity } from "@/lib/identity-lifecycle";
+import { createIdentityId } from "@/lib/identity-space";
 
 export type UserIdentity = {
     id: string;
     name: string;
+    previousNames?: string[];
     avatarUrl?: string;
     bio: string;
     gender: string;
@@ -67,14 +70,15 @@ export function UserIdentitySettings() {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [isNewIdentity, setIsNewIdentity] = useState(false);
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+    const [deleteBusy, setDeleteBusy] = useState(false);
+    const [deleteError, setDeleteError] = useState("");
 
     useEffect(() => {
         const saved = loadUserIdentities();
         if (saved.length > 0) {
             setIdentitiesRaw(saved);
         } else {
-            setIdentitiesRaw(DEFAULT_IDENTITIES);
-            saveUserIdentities(DEFAULT_IDENTITIES);
+            setIdentitiesRaw([]);
         }
     }, []);
 
@@ -85,7 +89,7 @@ export function UserIdentitySettings() {
 
     const addIdentity = useCallback(() => {
         const newIdentity: UserIdentity = {
-            id: `identity-${Date.now()}`,
+            id: `identity-${createIdentityId()}`,
             name: "新身份",
             bio: "",
             gender: "保密",
@@ -346,18 +350,24 @@ export function UserIdentitySettings() {
             {confirmDeleteId && (
                 <ConfirmDialog
                     title="确认删除？"
-                    message="删除身份卡片后无法恢复。是否继续？"
+                    message="将删除这个身份的聊天、关系、记忆、钱包及所有应用数据。共享角色档案保留。是否继续？"
                     icon={AlertCircle}
                     variant="danger"
                     confirmLabel="确认删除"
                     cancelLabel="取消"
                     onConfirm={() => {
-                        removeIdentity(confirmDeleteId);
-                        setConfirmDeleteId(null);
+                        if (deleteBusy) return;
+                        setDeleteBusy(true); setDeleteError("");
+                        void deletePhoneIdentity(confirmDeleteId).catch(error => {
+                            setDeleteError(error instanceof Error ? error.message : "删除未完成，请重试");
+                            setDeleteBusy(false);
+                        });
                     }}
                     onCancel={() => setConfirmDeleteId(null)}
                 />
             )}
+            {deleteBusy && <p role="status" className="menu-desc">正在删除身份数据…</p>}
+            {deleteError && <p role="alert" className="menu-desc">{deleteError}</p>}
         </div>
     );
 }

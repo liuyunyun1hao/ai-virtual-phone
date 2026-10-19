@@ -1,4 +1,5 @@
 "use client";
+import { LyricShareCard } from "@/components/music/lyric-share-card";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -13,13 +14,13 @@ import {
     updateMomentComment,
     deleteMomentCommentThread,
 } from "@/lib/moments-storage";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadChatAppCharacters as loadCharacters } from "@/lib/chat-app-characters";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { buildTwoLevelMomentThreads } from "@/lib/moments-comment-threading";
 import { getChatImageFromIndexedDB } from "@/lib/chat-asset-storage";
 import { splitBilingualText } from "@/lib/bilingual-text";
+import { needsMomentBodyTranslation, translateMomentBody, momentTranslationSource } from "@/lib/moment-body-translation";
 import { retryMomentGeneratedPhoto } from "@/lib/generated-image-retry";
-import { hasCharacterReferenceImage } from "@/lib/image-generation-service";
 import { GeneratedImageErrorDialog } from "./generated-image-error-dialog";
 import { Trash2, MoreHorizontal, MapPin, Heart, MessageCircle, Pencil } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui";
@@ -39,13 +40,25 @@ function MomentDefaultAvatar({ alt = "" }: { alt?: string }) {
 }
 
 export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentComposer, onOpenReplyComposer }: Props) {
+    const [translatingBody, setTranslatingBody] = useState(false);
+    const [bodyTranslationError, setBodyTranslationError] = useState("");
+    const bodyTranslationPending = useRef(false);
+    const sourceText = momentTranslationSource(post);
+    const storedTranslation = post.contentTranslationSource === sourceText ? post.contentTranslation : undefined;
+    const bodyText = storedTranslation && !splitBilingualText(sourceText) ? `${sourceText}|${storedTranslation}` : sourceText;
+    const translateBody = async () => {
+        if (bodyTranslationPending.current) return;
+        bodyTranslationPending.current = true;
+        setTranslatingBody(true);
+        setBodyTranslationError("");
+        try { await translateMomentBody(post.id); onUpdate(); }
+        catch (error) { setBodyTranslationError(error instanceof Error ? error.message : "翻译失败，请重试"); }
+        finally { bodyTranslationPending.current = false; setTranslatingBody(false); }
+    };
     const [comments, setComments] = useState<MomentComment[]>(() => loadMomentComments(post.id));
     const [showPhotoPromptEditor, setShowPhotoPromptEditor] = useState(false);
     const [photoPromptDraft, setPhotoPromptDraft] = useState("");
     const [photoRegenerating, setPhotoRegenerating] = useState(false);
-    const characterId = post.authorType === "character" ? post.authorId : undefined;
-    const [hasRef, setHasRef] = useState(() => hasCharacterReferenceImage(characterId));
-    const [photoUseReferenceDraft, setPhotoUseReferenceDraft] = useState(post.photoUseReferenceImage === true);
     const [showFallbackPreview, setShowFallbackPreview] = useState(false);
     // photoRetryError 只用于提示词弹窗内的即时校验；生成失败改用一次性弹窗，不再挂红字
     const [photoRetryError, setPhotoRetryError] = useState("");
@@ -66,34 +79,22 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
     const [resolvedPhotoUrl, setResolvedPhotoUrl] = useState<string | null>(null);
     useEffect(() => {
         let cancelled = false;
+        setResolvedPhotoUrl(null);
 
-        if (!post.photoUrl) {
-            setResolvedPhotoUrl(null);
-            return;
-        }
-
-        if (post.photoUrl.startsWith("asset://")) {
+        if (post.photoUrl?.startsWith("asset://")) {
             const assetId = post.photoUrl.slice(8);
             getChatImageFromIndexedDB(assetId).then(url => {
                 if (cancelled) return;
                 setResolvedPhotoUrl(url || null);
             });
         } else {
-            setResolvedPhotoUrl(post.photoUrl);
+            setResolvedPhotoUrl(post.photoUrl || null);
         }
 
         return () => {
             cancelled = true;
         };
     }, [post.photoUrl]);
-
-    // 如果落库状态为 pending 但实际并没有任何异步任务在跑（比如被刷新/大退杀掉了），
-    // 且帖子本身已有正常 photoUrl，将残留的 pending 复位，防止变成僵尸任务。
-    useEffect(() => {
-        if (post.photoUrl && post.photoGenerationStatus === "pending" && !photoRegenerating) {
-            updateMomentPost(post.id, { photoGenerationStatus: "generated" });
-        }
-    }, [post.id, post.photoUrl, post.photoGenerationStatus, photoRegenerating]);
 
     const chars = loadCharacters();
     // 角色帖子下，用户名用该角色绑定的用户人设；用户自己的帖子用默认人设
@@ -162,7 +163,7 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
     };
 
     const openPostEditor = () => {
-        setPostContentDraft(post.content);
+        setPostContentDraft(post.musicLyricShare ? post.musicLyricShare.caption || "" : post.content);
         setPostPhotoDescDraft(post.photoDescription || "");
         setPostUseReferenceDraft(post.photoUseReferenceImage === true);
         setPostLocationDraft(post.location || "");
@@ -172,10 +173,11 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
 
     const handlePostEditSave = () => {
         const content = postContentDraft.trim();
-        if (!content) return;
+        if (!content && !post.musicLyricShare) return;
         const photoDescription = postPhotoDescDraft.trim();
         updateMomentPost(post.id, {
-            content,
+            content: post.musicLyricShare ? [content, `分享歌曲《${post.musicLyricShare.title}》 — ${post.musicLyricShare.artist}`, `「${post.musicLyricShare.text}」`].filter(Boolean).join("\n\n") : content,
+            ...(post.musicLyricShare ? { musicLyricShare: { ...post.musicLyricShare, caption: content } } : {}),
             photoDescription: photoDescription || undefined,
             photoUseReferenceImage: photoDescription ? postUseReferenceDraft : false,
             location: postLocationDraft.trim() || undefined,
@@ -258,49 +260,32 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
     const canRetryPhoto = Boolean(fallbackPhotoDescription);
     const canRegeneratePhoto = Boolean(resolvedPhotoUrl)
         && Boolean(post.photoUrl)
-        && Boolean(post.photoDescription?.trim());
+        && Boolean(post.photoDescription?.trim())
+        && post.photoGenerationStatus !== "pending"
+        && (post.photoGenerationStatus === "generated" || Boolean(post.photoGenerationPrompt));
     const openPhotoPromptEditor = useCallback(() => {
-        const latestHasRef = hasCharacterReferenceImage(characterId);
-        setHasRef(latestHasRef);
         setPhotoPromptDraft(post.photoDescription?.trim() || "");
-        setPhotoUseReferenceDraft(latestHasRef && post.photoUseReferenceImage === true);
         setPhotoRetryError("");
         setShowPhotoPromptEditor(true);
-    }, [characterId, post.photoDescription, post.photoUseReferenceImage]);
+    }, [post.photoDescription]);
     const handleRegeneratePhotoWithPrompt = useCallback(() => {
         const nextDescription = photoPromptDraft.trim();
         if (!nextDescription) {
             setPhotoRetryError("提示词不能为空");
             return;
         }
-        const latestHasRef = hasCharacterReferenceImage(characterId);
         setShowPhotoPromptEditor(false);
         setPhotoRegenerating(true);
         setPhotoRetryError("");
-        retryMomentGeneratedPhoto(post, nextDescription, latestHasRef ? photoUseReferenceDraft : undefined)
-            .then(async (updated) => {
-                if (updated?.photoUrl?.startsWith("asset://")) {
-                    const assetId = updated.photoUrl.slice(8);
-                    try {
-                        const url = await getChatImageFromIndexedDB(assetId);
-                        if (url) {
-                            const img = new Image();
-                            img.src = url;
-                            if ("decode" in img) await img.decode().catch(() => {});
-                        }
-                    } catch {
-                        // ignore predecode error
-                    }
-                }
-                onUpdate();
-            })
+        retryMomentGeneratedPhoto(post, nextDescription)
+            .then(() => onUpdate())
             .catch(error => {
                 setPhotoFailureNotice(error instanceof Error ? error.message : String(error));
             })
             .finally(() => {
                 setPhotoRegenerating(false);
             });
-    }, [characterId, onUpdate, photoPromptDraft, photoUseReferenceDraft, post]);
+    }, [onUpdate, photoPromptDraft, post]);
 
     return (
         <div data-moment-post-id={post.id} className="feed-post relative border-b-[2.5px] border-[var(--c-card-border)] pb-5 mb-5 w-full bg-transparent px-4 pt-2">
@@ -357,13 +342,16 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
             {/* Text content */}
             <div className="feed-post-content ts-16 leading-[1.75] text-[var(--c-text-title)] whitespace-pre-wrap break-words mb-3 w-full">
                 <BilingualTextBlock
-                    text={post.content}
+                    text={bodyText}
                     mode="plain"
                     defaultExpanded={defaultTranslationExpanded}
                 />
+                {!storedTranslation && needsMomentBodyTranslation(sourceText) && <button type="button" className="moment-body-translate" disabled={translatingBody} onClick={translateBody}>{translatingBody ? "翻译中…" : "翻译"}</button>}
+                {bodyTranslationError && <div role="status" className="ts-12 text-[var(--c-text-muted)]">{bodyTranslationError}</div>}
             </div>
 
             {/* Location */}
+            {post.musicLyricShare && <div className="mb-3"><LyricShareCard {...post.musicLyricShare} /></div>}
             {post.location && (
                 <div className="feed-post-location mb-3 text-[var(--c-icon)] opacity-80 flex items-center ts-12">
                     <MapPin size={12} strokeWidth={1.75} className="mr-1" />
@@ -388,7 +376,7 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
                         regenerating={photoRegenerating}
                     />
                 )}
-                {resolvedPhotoUrl && photoRegenerating && (
+                {resolvedPhotoUrl && post.photoGenerationStatus === "pending" && (
                     <div className="ts-12 text-[var(--c-icon)] opacity-80">图片重新生成中…</div>
                 )}
                 {fallbackPhotoDescription && (
@@ -431,19 +419,6 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
                                 placeholder="输入图片提示词"
                                 disabled={photoRegenerating}
                             />
-                            {hasRef ? (
-                                <label className="chat-generated-image-prompt-check">
-                                    <input
-                                        type="checkbox"
-                                        checked={photoUseReferenceDraft}
-                                        disabled={photoRegenerating}
-                                        onChange={e => setPhotoUseReferenceDraft(e.target.checked)}
-                                    />
-                                    <span>使用角色参考图（角色出镜）</span>
-                                </label>
-                            ) : (
-                                <div className="chat-generated-image-prompt-empty-hint">该角色未配置参考图</div>
-                            )}
                             {photoRetryError && <div className="feed-post-photo-retry-error">{photoRetryError}</div>}
                         </div>
                         <div className="modal-footer" data-ui="modal-footer">
@@ -514,7 +489,7 @@ export function MomentPostCard({ post, onUpdate, onRequestDelete, onOpenCommentC
                         </div>
                         <div className="modal-footer" data-ui="modal-footer">
                             <button className="ui-btn ui-btn-ghost" onClick={() => setEditingPostOpen(false)}>取消</button>
-                            <button className="ui-btn ui-btn-action" disabled={!postContentDraft.trim()} onClick={handlePostEditSave}>保存</button>
+                            <button className="ui-btn ui-btn-action" disabled={!postContentDraft.trim() && !post.musicLyricShare} onClick={handlePostEditSave}>保存</button>
                         </div>
                     </div>
                 </div>,

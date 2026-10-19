@@ -1,0 +1,58 @@
+.map {
+  position: relative;
+  width: 100%;
+  height: 126px;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 20px;
+  background: #f1f2ee;
+  border: 1px solid rgba(90, 100, 110, .12);
+}
+.streets { width: 100%; height: 100%; display: block; }
+.destination { position: absolute; left: 55%; top: 50%; width: 0; height: 0; }
+.pin {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  left: -20px;
+  bottom: -3px;
+  color: #495967;
+  filter: drop-shadow(0 2px 1px rgba(255,255,255,.95)) drop-shadow(0 4px 4px rgba(35,45,55,.18));
+  animation: arrive 450ms ease-out both;
+}
+.pulse {
+  position: absolute;
+  width: 26px;
+  height: 12px;
+  left: -13px;
+  top: -6px;
+  border: 1px solid rgba(83,110,125,.28);
+  border-radius: 50%;
+  background: rgba(120,145,155,.1);
+  animation: pulse 3s ease-out infinite;
+}
+.route { animation: route 4s linear infinite; }
+.card {
+  width: 208px;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 20px;
+  border: 1px solid var(--im26-glass-edge, rgba(255,255,255,.85));
+  background: var(--im26-glass, rgba(248,249,251,.8));
+  box-shadow: 0 3px 12px rgba(42,52,64,.06);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+}
+.card .map { height: 104px; border: 0; border-radius: 0; }
+.card .pin { width: 34px; height: 34px; left: -17px; }
+.caption { display: flex; align-items: center; height: 40px; box-sizing: border-box; padding: 10px 12px; color: var(--im26-ink, #25292e); }
+.brand { position: absolute; right: 8px; bottom: 6px; display: inline-flex; align-items: center; gap: 2px; font-size: 10px; line-height: 13px; color: #343d45; text-shadow: 0 1px 2px #fff; pointer-events: none; }
+.brand svg { width: 11px; height: 12px; }
+.brand strong { font-weight: 600; }
+.label { font-size: 14px; font-weight: 500; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@keyframes arrive { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse { from { transform: scale(.8); opacity: .8; } to { transform: scale(2.4); opacity: 0; } }
+@keyframes route { to { stroke-dashoffset: -36; } }
+@media (prefers-reduced-motion: reduce) {
+  .pin, .pulse, .route { animation: none; }
+}

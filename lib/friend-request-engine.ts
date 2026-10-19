@@ -2,7 +2,7 @@
 // Handles AI reaction when a user deletes a friend.
 // The AI can choose to send a friend request (up to 3 rounds) or give up.
 
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import {
     ChatSession,
     loadChatSessions,

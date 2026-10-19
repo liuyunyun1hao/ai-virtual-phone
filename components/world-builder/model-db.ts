@@ -1,3 +1,4 @@
+import { identityIndexedDbFactory, identityDatabaseName, assertIdentityActive } from "@/lib/identity-runtime";
 /**
  * 筑境 — 用户模型 IndexedDB 存储
  */
@@ -24,7 +25,7 @@ function ensureStore(db: IDBDatabase): void {
 
 function openDBVersion(version?: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
+    const req = version ? identityIndexedDbFactory().open(identityDatabaseName(DB_NAME), version) : identityIndexedDbFactory().open(identityDatabaseName(DB_NAME));
     req.onupgradeneeded = () => {
       ensureStore(req.result);
     };
@@ -48,6 +49,7 @@ export async function saveModel(model: Omit<UserModel, "id" | "createdAt">): Pro
   const id = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const record: UserModel = { ...model, id, createdAt: Date.now() };
   return new Promise((resolve, reject) => {
+    assertIdentityActive();
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).put(record);
     tx.oncomplete = () => resolve(id);
@@ -75,6 +77,7 @@ export async function getAllModels(): Promise<UserModel[]> {
 export async function deleteModel(id: string): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
+    assertIdentityActive();
     const tx = db.transaction(STORE_NAME, "readwrite");
     tx.objectStore(STORE_NAME).delete(id);
     tx.oncomplete = () => resolve();

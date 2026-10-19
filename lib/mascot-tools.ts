@@ -1,3 +1,4 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 // lib/mascot-tools.ts
 // 小卷工具系统：7 个套件 + 36 个细粒度工具，支持文本协议和原生协议双轨。
 //
@@ -2898,11 +2899,11 @@ function normalizeExpandedPackageIds(ids: unknown): string[] {
 export function loadExpandedPackages(): string[] {
     if (typeof window === "undefined") return [];
     try {
-        const raw = window.localStorage.getItem(EXPANDED_STORAGE_KEY)
+        const raw = identityLocalStorage.getItem(EXPANDED_STORAGE_KEY)
             ?? window.sessionStorage.getItem(EXPANDED_STORAGE_KEY);
         if (!raw) return [];
         const ids = normalizeExpandedPackageIds(JSON.parse(raw));
-        if (ids.length > 0 && !window.localStorage.getItem(EXPANDED_STORAGE_KEY)) {
+        if (ids.length > 0 && !identityLocalStorage.getItem(EXPANDED_STORAGE_KEY)) {
             saveExpandedPackages(ids);
         }
         return ids;
@@ -2912,14 +2913,14 @@ export function loadExpandedPackages(): string[] {
 export function saveExpandedPackages(ids: string[]): void {
     if (typeof window === "undefined") return;
     try {
-        window.localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(normalizeExpandedPackageIds(ids)));
+        identityLocalStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify(normalizeExpandedPackageIds(ids)));
     } catch {}
 }
 
 export function clearExpandedPackages(): void {
     if (typeof window === "undefined") return;
     try {
-        window.localStorage.removeItem(EXPANDED_STORAGE_KEY);
+        identityLocalStorage.removeItem(EXPANDED_STORAGE_KEY);
         window.sessionStorage.removeItem(EXPANDED_STORAGE_KEY);
     } catch {}
 }

@@ -9,77 +9,150 @@ import { RealityBridgeScheduler } from "@/components/reality-bridge-scheduler";
 import { MediaMaintenanceScheduler } from "@/components/media-maintenance-scheduler";
 import { DesktopShell } from "./desktop-shell";
 import { OfflinePushRevampAnnouncement } from "./offline-push-revamp-announcement";
+import { YykUpdateNotice } from "./yyk-update-notice";
 import { SplashAnimation } from "./splash-animation";
 import { MusicProvider } from "@/lib/music-context";
-import { hydrateKvDb, isKvHydrated } from "@/lib/kv-db";
+import { hydrateKvDb } from "@/lib/kv-db";
 import { getThemeAssetMap, readThemeProfile } from "@/lib/theme-storage";
 import { resolveActiveIconSkins, type ThemeProfile } from "@/lib/theme-types";
 import { hasPendingMcpOAuthCallback } from "@/lib/tool-executor";
 import { shouldRequestPwaFullscreen } from "@/lib/pwa-display-mode";
+import { phoneSessionParent } from "@/lib/phone-session-protocol";
+import { PhoneSessionLoading } from "./phone-session-host";
 
 const TEXT = {
   loading: "\u52A0\u8F7D\u4E2D...",
 };
 
-/**
- * 首屏真正会用到的字体（开机动画用的 Inter / Instrument Serif /
- * JetBrains Mono 等，均为本地 woff2，命中缓存后几乎零成本）。
- *
- * ── 背景（这次要复盘的那件事）──
- * 这里原本有一版「把 35 个内置字体 URL 全部 fetch 预热 + 35 条
- * document.fonts.load」的无差别预热（BUILTIN_FONT_URLS / warmBuiltinFonts）。
- * 后来这个环节被整段摘掉了——函数体还留在文件里，但已经没有任何调用点，
- * 也就是说开机阶段不再等字体。代价是：首屏先用系统兜底字体排版，等主题字体
- * 到位后再整页重排一次，用户感知就是「进桌面闪一下 + 卡一下」。
- *
- * 现在恢复「预热」这件事本身，但只预热首屏必需的几条，并且带超时上限：
- * 超时就直接放行，绝不拿字体拖慢开机。
- */
-const FIRST_PAINT_FONT_SPECS = [
+const BUILTIN_FONT_URLS = [
+  "/fonts/huiwen.woff2",
+  "/fonts/huiwen.woff2",
+  "/fonts/special-elite.woff2",
+  "/fonts/splash/instrument-serif-regular-400.woff2",
+  "/fonts/splash/instrument-serif-italic-400.woff2",
+  "/fonts/splash/inter-300.woff2",
+  "/fonts/splash/inter-400.woff2",
+  "/fonts/splash/inter-500.woff2",
+  "/fonts/splash/major-mono-display-400.woff2",
+  "/fonts/splash/jetbrains-mono-300.woff2",
+  "/fonts/splash/jetbrains-mono-400.woff2",
+  "/fonts/interview/noto-serif-sc.woff2",
+  "/fonts/interview/bodoni-moda.woff2",
+  "/fonts/interview/bodoni-moda-italic.woff2",
+  "/fonts/interview/eb-garamond.woff2",
+  "/fonts/interview/eb-garamond-italic.woff2",
+  "/fonts/interview/long-cang.woff2",
+  "/fonts/interview/cinzel.woff2",
+  "/fonts/interview/press-start-2p.woff2",
+  "/fonts/notewall/ximai.woff2",
+  "/fonts/notewall/xiaozhitiao.woff2",
+  "/fonts/notewall/huiwen-upload.woff2",
+  "/fonts/notewall/chen-yuluoyan-thin.woff2",
+  "/fonts/game-hall/fredoka-400.woff2",
+  "/fonts/game-hall/fredoka-500.woff2",
+  "/fonts/game-hall/fredoka-600.woff2",
+  "/fonts/game-hall/fredoka-700.woff2",
+  "/fonts/game-hall/caveat-500.woff2",
+  "/fonts/game-hall/caveat-700.woff2",
+  "/fonts/game-hall/zen-maru-gothic-500.woff2",
+  "/fonts/game-hall/zen-maru-gothic-700.woff2",
+  "/fonts/game-hall/zen-maru-gothic-900.woff2",
+  "/fonts/\u5B57\u4F53/MISANS-REGULAR.woff2",
+  "/fonts/\u5B57\u4F53/MISANS-MEDIUM.woff2",
+  "/fonts/\u5B57\u4F53/MISANS-SEMIBOLD.woff2",
+] as const;
+
+const BUILTIN_FONT_LOAD_SPECS = [
+  '400 1em "Instrument Serif"',
+  'italic 400 1em "Instrument Serif"',
   '300 1em "Inter"',
   '400 1em "Inter"',
   '500 1em "Inter"',
-  '400 1em "Instrument Serif"',
-  'italic 400 1em "Instrument Serif"',
+  '400 1em "Major Mono Display"',
   '300 1em "JetBrains Mono"',
   '400 1em "JetBrains Mono"',
-  '400 1em "Major Mono Display"',
+  '400 1em "Huiwen"',
+  '400 1em "Noto Serif SC"',
+  '400 1em "Source Han Serif SC"',
+  '400 1em "Bodoni Moda"',
+  'italic 400 1em "Bodoni Moda"',
+  '400 1em "EB Garamond"',
+  'italic 400 1em "EB Garamond"',
+  '400 1em "Long Cang"',
+  '400 1em "Cinzel"',
+  '400 1em "Press Start 2P"',
+  '400 1em "Special Elite"',
+  '400 1em "NoteWall Ximai"',
+  '400 1em "NoteWall Xiaozhitiao"',
+  '400 1em "NoteWall Huiwen"',
+  '400 1em "Game Hall Fredoka"',
+  '500 1em "Game Hall Fredoka"',
+  '600 1em "Game Hall Fredoka"',
+  '700 1em "Game Hall Fredoka"',
+  '500 1em "Game Hall Caveat"',
+  '700 1em "Game Hall Caveat"',
+  '500 1em "Game Hall Zen Maru Gothic"',
+  '700 1em "Game Hall Zen Maru Gothic"',
+  '900 1em "Game Hall Zen Maru Gothic"',
+  '400 1em "MiSans"',
+  '500 1em "MiSans"',
+  '600 1em "MiSans"',
 ] as const;
 
-/** 字体预热的最长等待时间；到点无条件放行。 */
-const FONT_WARM_TIMEOUT_MS = 1500;
+const FONT_CACHE_BATCH_SIZE = 3;
+const FONT_CACHE_BATCH_DELAY_MS = 80;
 
-async function warmFirstPaintFonts(): Promise<void> {
-  if (typeof window === "undefined" || typeof document === "undefined" || !document.fonts) {
-    return;
+type IdleDeadlineLike = {
+  didTimeout: boolean;
+  timeRemaining: () => number;
+};
+
+type WindowWithIdleCallback = Window & {
+  requestIdleCallback?: (callback: (deadline: IdleDeadlineLike) => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleIdleTask(callback: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => { };
   }
 
-  const loads = FIRST_PAINT_FONT_SPECS.map((spec) => document.fonts.load(spec).catch(() => []));
-  const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, FONT_WARM_TIMEOUT_MS));
+  const idleWindow = window as WindowWithIdleCallback;
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(() => callback(), { timeout: 2400 });
+    return () => idleWindow.cancelIdleCallback?.(handle);
+  }
 
-  await Promise.race([Promise.all(loads).then(() => undefined), timeout]);
+  const handle = window.setTimeout(callback, 600);
+  return () => window.clearTimeout(handle);
 }
 
-/** 主题自带字体（dataURL）预热：让桌面首帧直接就是最终排版。 */
-function preloadFontFace(dataUrl: string | null | undefined): Promise<void> {
-  if (!dataUrl || typeof window === "undefined") {
-    return Promise.resolve();
-  }
-
-  const FontFaceCtor = (window as Window & { FontFace?: typeof FontFace }).FontFace;
-  if (typeof FontFaceCtor !== "function") {
-    return Promise.resolve();
-  }
-
-  try {
-    const face = new FontFaceCtor("AIVirtualPhoneUserFont", `url(${dataUrl})`);
-    return face.load().then(() => undefined).catch(() => undefined);
-  } catch {
-    return Promise.resolve();
-  }
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function SplashScreen({ ready = false, onEnter }: { ready?: boolean; onEnter?: () => void }) {
+async function cacheFontUrl(url: string): Promise<void> {
+  const response = await fetch(url, { cache: "force-cache" });
+  if (!response.ok) return;
+  await response.arrayBuffer();
+}
+
+async function warmBuiltinFonts(shouldStop: () => boolean): Promise<void> {
+  if (typeof window === "undefined") return;
+
+  for (let index = 0; index < BUILTIN_FONT_URLS.length; index += FONT_CACHE_BATCH_SIZE) {
+    if (shouldStop()) return;
+    const batch = BUILTIN_FONT_URLS.slice(index, index + FONT_CACHE_BATCH_SIZE);
+    await Promise.all(batch.map((url) => cacheFontUrl(url).catch(() => undefined)));
+    if (shouldStop()) return;
+    await wait(FONT_CACHE_BATCH_DELAY_MS);
+  }
+
+  if (shouldStop() || !document.fonts) return;
+  await Promise.all(BUILTIN_FONT_LOAD_SPECS.map((spec) => document.fonts.load(spec).catch(() => [])));
+}
+
+function SplashScreen({ ready = false, onEnter, error }: { ready?: boolean; onEnter?: () => void; error?: string }) {
   return (
     <main className="app-root splash-root">
       <section
@@ -90,6 +163,7 @@ function SplashScreen({ ready = false, onEnter }: { ready?: boolean; onEnter?: (
           <div className="phone-frame">
             <div className="phone-shell splash-phone-screen">
               <SplashAnimation />
+              {error && <p role="alert" className="absolute bottom-20 left-6 right-6 rounded-2xl bg-white/90 p-4 text-center text-sm text-slate-700 dark:bg-slate-900/90 dark:text-slate-200">{error}</p>}
               <button
                 type="button"
                 className={ready ? "splash-enter-button splash-enter-button-show" : "splash-enter-button"}
@@ -152,41 +226,27 @@ async function prepareDesktopThemeForFirstPaint(): Promise<PreparedDesktopTheme>
   const profile = readThemeProfile();
   const assetIds = collectFirstPaintThemeAssetIds(profile);
   const assets = assetIds.length ? await getThemeAssetMap(assetIds) : {};
-  const fontDataUrl = profile.fontAssetId ? assets[profile.fontAssetId] : null;
-  // 壁纸解码与主题字体预热并行：字体先就位，桌面首帧就是最终排版，
-  // 不会再出现「先兜底字体、再整页重排」的二次布局。
-  await Promise.all([
-    ...Object.values(assets).map(preloadImageDataUrl),
-    preloadFontFace(fontDataUrl)
-  ]);
+  await Promise.all(Object.values(assets).map(preloadImageDataUrl));
   return { profile, assets };
 }
 
-export function MainApp() {
+export function MainApp({ resumeAfterIdentitySwitch = false }: { resumeAfterIdentitySwitch?: boolean } = {}) {
   const [preparedDesktopTheme, setPreparedDesktopTheme] = useState<PreparedDesktopTheme | null>(null);
   const [hydrated, setHydrated] = useState(false);
-  const [splashDismissed, setSplashDismissed] = useState(false);
-  const [kvHydrateFailed, setKvHydrateFailed] = useState(false);
-  const [initAttempt, setInitAttempt] = useState(0);
+  const [startupError, setStartupError] = useState("");
+  const [splashDismissed, setSplashDismissed] = useState(resumeAfterIdentitySwitch);
 
   useEffect(() => {
     let cancelled = false;
+    if (phoneSessionParent()) setSplashDismissed(true);
 
     // 申请持久化存储：批准后 iOS/安卓不会再因存储压力擅自回收 IndexedDB
     // （摊主钥匙、聊天记录等都存在里面）。静默尽力而为，被拒也无碍。
     void navigator.storage?.persist?.().catch(() => {});
 
     void (async () => {
-      // 字体预热与 KV 水合并行：两者互不依赖，串行只会白白拉长开机等待。
-      await Promise.all([hydrateKvDb(), warmFirstPaintFonts()]);
+      await hydrateKvDb();
       if (cancelled) return;
-      // 水合失败绝不放行：此时所有 KV 数据（设置/绑定/线下记录等）在内存里都是
-      // 空的，进入后任何一次保存都会拿空数据整包覆盖 IndexedDB 里的真实历史。
-      if (!isKvHydrated()) {
-        setKvHydrateFailed(true);
-        return;
-      }
-      setKvHydrateFailed(false);
 
       let nextPreparedTheme: PreparedDesktopTheme | null = null;
       try {
@@ -201,7 +261,9 @@ export function MainApp() {
       if (hasPendingMcpOAuthCallback()) {
         setSplashDismissed(true);
       }
-    })();
+    })().catch(error => {
+      if (!cancelled) setStartupError(`无法准备身份数据：${error instanceof Error ? error.message : "请检查浏览器存储后刷新"}`);
+    });
 
     // 安卓全屏兜底。是否请求全屏在每次点击时读取，设置切换后无需重载。
     const isMobile = window.matchMedia("(max-width: 500px) and (hover: none) and (pointer: coarse)").matches;
@@ -211,8 +273,9 @@ export function MainApp() {
 
     function tryFullscreen() {
       if (!shouldRequestPwaFullscreen()) return;
-      const doc = document.documentElement;
-      if (document.fullscreenElement) return;
+      const surface = phoneSessionParent() ?? window;
+      const doc = surface.document.documentElement;
+      if (surface.document.fullscreenElement) return;
       doc.requestFullscreen?.().catch(() => { });
     }
     document.addEventListener("click", tryFullscreen);
@@ -220,33 +283,14 @@ export function MainApp() {
       cancelled = true;
       document.removeEventListener("click", tryFullscreen);
     };
-  }, [initAttempt]);
-
-  if (kvHydrateFailed) {
-    return (
-      <main className="app-root" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100dvh", padding: "0 28px", background: "#0c0c12", color: "#e8e8ef" }}>
-        <div style={{ maxWidth: 340, textAlign: "center" }}>
-          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 12 }}>本机数据暂时读取失败</div>
-          <div style={{ fontSize: 13, lineHeight: 1.8, opacity: 0.75, marginBottom: 20 }}>
-            浏览器的本地数据库（IndexedDB）没能打开。数据本身还在，为了避免在读不到数据的状态下继续使用把历史记录覆盖掉，应用先暂停进入。
-            <br />可以先重试；仍然不行的话，试试关掉本站的其他标签页、重启浏览器，或确认没有开无痕/隐私模式。
-          </div>
-          <button
-            type="button"
-            onClick={() => { setKvHydrateFailed(false); setInitAttempt((n) => n + 1); }}
-            style={{ padding: "10px 32px", borderRadius: 20, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 14, cursor: "pointer" }}
-          >
-            重试
-          </button>
-        </div>
-      </main>
-    );
-  }
+  }, []);
 
   return (
     <AccountGate>
       {!splashDismissed ? (
-        <SplashScreen ready={hydrated} onEnter={() => setSplashDismissed(true)} />
+        <SplashScreen ready={hydrated} error={startupError} onEnter={() => setSplashDismissed(true)} />
+      ) : !hydrated ? (
+        <PhoneSessionLoading error={startupError} onRetry={() => window.location.reload()} />
       ) : (
         <main className="app-root">
           <MusicProvider>
@@ -255,6 +299,7 @@ export function MainApp() {
               initialThemeAssets={preparedDesktopTheme?.assets}
             />
             <OfflinePushRevampAnnouncement />
+            <YykUpdateNotice />
             <CloudBackupScheduler />
             <RealityBridgeScheduler />
             <MediaMaintenanceScheduler />

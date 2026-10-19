@@ -13,6 +13,7 @@ import { isPersonalPushCloudActive, loadPersonalPushCloudState, personalPushFetc
 import { removeTimedWakeSchedule } from "./timed-wake-storage";
 import { appendBridgeFeed } from "./reality-bridge/storage";
 import { loadScreenChatSettings, saveScreenChatAck } from "./reality-bridge/storage";
+import { assertIdentityActive, hasActiveIdentity, currentIdentityCloudTag, readIdentityRuntime } from "./identity-runtime";
 
 type OutboxEntry = {
     id: string;
@@ -57,6 +58,7 @@ function clearTimedWakeIfHandled(triggerKey: string | null): void {
 
 export async function consumeServerOutbox(options?: { silent?: boolean; force?: boolean }): Promise<void> {
     if (typeof window === "undefined") return;
+    if (!hasActiveIdentity()) return;
     // 共享回传箱已紧急停用：没有个人 Supabase 时直接结束，不请求 status/outbox。
     if (!isPersonalPushCloudActive()) return;
     if (consuming) return;
@@ -89,6 +91,14 @@ export async function consumeServerOutbox(options?: { silent?: boolean; force?: 
                         continue;
                     }
                     const meta = entry.meta || {};
+                    assertIdentityActive();
+                    const scope = (meta as Record<string, unknown>).reply as Record<string, unknown> | undefined ?? meta as Record<string, unknown>;
+                    const expected = currentIdentityCloudTag();
+                    const legacy = readIdentityRuntime();
+                    const compatible = scope.userIdentityId === undefined
+                        ? legacy?.activeUserId === legacy?.legacyOwnerId && legacy?.revision === 0
+                        : scope.userIdentityId === expected.userIdentityId && scope.identityRevision === expected.identityRevision;
+                    if (!compatible) { consumedIds.push(entry.id); continue; }
 
                     if ((meta as { kind?: string }).kind === "bridge") {
                         const bridgeMeta = meta as Record<string, unknown> & {
@@ -276,6 +286,7 @@ export function installServerOutboxConsumer(): void {
     // 启动时保留 5 分钟节流；回前台和 SW 明确告知新消息时强制补拉。
     // iOS 会在后台冻结页面，如果回前台仍被节流，屏幕速聊消息只能等到下次重启才会合并。
     const requestConsume = (force = false) => {
+        if (!hasActiveIdentity()) return;
         if (consumeRequestTimer !== null) window.clearTimeout(consumeRequestTimer);
         consumeRequestTimer = window.setTimeout(() => {
             consumeRequestTimer = null;
@@ -288,6 +299,7 @@ export function installServerOutboxConsumer(): void {
         if (!document.hidden) requestConsume(true);
     });
     navigator.serviceWorker?.addEventListener("message", (event) => {
+        if (!hasActiveIdentity()) return;
         if (event.data?.type === "push_outbox_ready") {
             requestConsume(true);
             return;

@@ -13,7 +13,7 @@ import {
   reindexSessionMessageOrdersByTime,
   upsertImportedChatMessage,
 } from "./chat-storage";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { Character } from "./character-types";
 import {
   loadApiConfigs,
@@ -72,7 +72,6 @@ import { ensureBucket, getObject, listObjects, putObject, removeObject } from ".
 import type { WeixinBotConfig } from "./weixin-storage";
 import { loadWeixinBots } from "./weixin-storage";
 import { parseAIResponse } from "./rich-message-parser";
-import { getStatusRegionConfig, isCustomStatusRegionActive } from "./chat-status-region";
 
 const WEIXIN_CLOUD_CONFIG_KEY = "weixin_cloud_sync_config_v1";
 const WEIXIN_CLOUD_PREFIX = "weixin-cloud";
@@ -385,17 +384,6 @@ export function buildWeixinCloudAssistantFunctionUrl(config: CloudBackupConfig =
   const base = normalizeBackupUrl(config.url);
   if (!base) throw new Error("请先在数据管理里配置 Supabase 云端备份。");
   return `${base}/functions/v1/${WEIXIN_CLOUD_FUNCTION_SLUG}`;
-}
-
-/**
- * 换设备重连用的部署探测：微信云函数没有健康检查接口，但部署流程一定会把
- * cron 密钥写进备份桶（见 ensureWeixinCloudCronSecret）——桶里有这个对象，
- * 就说明该项目部署过微信接入。
- */
-export async function probeWeixinCloudDeployed(): Promise<boolean> {
-  const config = requireCloudBackupConfig();
-  const existing = await getObject(config, WEIXIN_CLOUD_CRON_SECRET_PATH);
-  return Boolean(existing);
 }
 
 /**
@@ -1960,10 +1948,6 @@ function importCloudAssistantMessage(
     characterName,
   );
   const parsed = parseAIResponse(normalizedContent, getLatestCharacterStateValues(stored.characterId));
-  // 自定义状态栏渲染戳：不盖的话 custom 模式下 [状态栏] 原文按 markdown 渲染，看着像掉格式
-  const statusRegionMode = parsed.statusPanel && isCustomStatusRegionActive(getStatusRegionConfig(session.id))
-    ? ("custom" as const)
-    : undefined;
   const visibleParts = parsed.parts.filter(part =>
     part.mediaType !== "voice_call"
     && part.mediaType !== "video_call"
@@ -1994,7 +1978,6 @@ function importCloudAssistantMessage(
       mediaType: part.mediaType,
       mediaData: part.mediaData,
       statusPanel: index === 0 && parsed.statusPanel ? parsed.statusPanel : undefined,
-      statusRegionMode: index === 0 && parsed.statusPanel ? statusRegionMode : undefined,
       innerMonologue: index === 0 && parsed.innerMonologue ? parsed.innerMonologue : undefined,
       stateValues: index === 0 && parsed.stateValues.length > 0 ? parsed.stateValues : undefined,
       freshStateValues: index === 0 ? parsed.freshStateValues : undefined,
@@ -2006,7 +1989,6 @@ function importCloudAssistantMessage(
       role: "assistant",
       content: "",
       statusPanel: parsed.statusPanel || undefined,
-      statusRegionMode,
       innerMonologue: parsed.innerMonologue || undefined,
       stateValues: parsed.stateValues.length > 0 ? parsed.stateValues : undefined,
       freshStateValues: parsed.freshStateValues,

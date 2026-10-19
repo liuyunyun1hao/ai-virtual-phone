@@ -1,4 +1,4 @@
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { Character } from "./character-types";
 import { ChatEngineError, sendLLMRequest } from "./chat-engine";
 import { buildCalendarScheduleMarker } from "./calendar-storage";

@@ -6,7 +6,7 @@ import { STAT_LABELS, ALL_STATS } from "./map-types";
 import { simpleLLMCall } from "./api-helpers";
 import { previewMessagesForApi, sendLLMRequest } from "./chat-engine";
 import type { ApiConfig } from "./settings-types";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { resolveBinding, loadBindingConfig, loadPresets, loadWorldBooks, loadRegexes, resolveUserIdentity, loadApiConfigs } from "./settings-storage";
 import { assemblePromptPayload, type LLMMessage } from "./llm-prompt-assembler";
 import { retrieveMemoriesForPrompt, retrieveCoreMemoriesForPrompt } from "./memory-service";

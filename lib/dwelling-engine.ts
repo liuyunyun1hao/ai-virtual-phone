@@ -1,7 +1,7 @@
 import type { DwellingFurniture, DwellingLayout, DwellingMarker, DwellingPosition } from "./dwelling-storage";
 import { loadDwellingLayout } from "./dwelling-storage";
 import type { ApiConfig, PresetConfig, RegexConfig, WorldBookConfig } from "./settings-types";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import {
     loadBindingConfig,
     loadApiConfigs,

@@ -1,0 +1,36 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const ts = require('typescript');
+const context = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../lib/chat-quote-preview.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,context);
+const preview = context.exports.getQuotePreview;
+assert.equal(preview({content:'',mediaType:'audio',mediaData:{label:'早安'}}),'语音：早安');
+assert.equal(preview({content:'',mediaType:'audio'}),'语音消息');
+assert.equal(preview({content:'你好'}),'你好');
+assert.equal(preview({content:'',mediaType:'image'}),'图片消息');
+assert.equal(preview({content:'很'.repeat(100),mediaType:'audio'}),'语音：'+'很'.repeat(100));
+assert.equal(preview({content:'',mediaType:'transfer',mediaData:{amount:66666,label:'零花钱'}}),'转账：¥66,666 · 零花钱');
+assert.equal(preview({content:'',mediaType:'transfer',mediaData:{amount:0}}),'转账：¥0');
+assert.equal(preview({content:'',mediaType:'gift',mediaData:{giftName:'玫瑰',label:'早安'}}),'礼物：玫瑰 · 早安');
+assert.equal(preview({content:'',mediaType:'app_card',mediaData:{appCardTitle:'行程',appCardBody:'周末见'}}),'卡片：行程 · 周末见');
+const colorsContext = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../lib/chat-bubble-colors.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,colorsContext);
+const resolve = colorsContext.exports.resolveBubbleColors;
+for (const dark of [false,true]) {
+    const automatic = resolve({charMode:'auto'},dark,false,'#123e68');
+    const restored = resolve({charMode:'classic'},dark,false,'#123e68');
+    assert.notEqual(automatic.surface,restored.surface);
+    assert.equal(restored.surface,dark?'#353539':'#e9e9eb');
+    assert.equal(resolve({},dark,true,'#123e68').surface,'#38acfc');
+}
+const css = fs.readFileSync(path.join(__dirname,'../styles/imessage26.css'),'utf8');
+const quoteRule = css.slice(0,css.indexOf('/* Messages home:'));
+assert.match(quoteRule,/background:transparent !important/);
+assert.match(quoteRule,/border:1px solid color-mix/);
+assert.match(quoteRule,/content:none !important/);
+assert.doesNotMatch(quoteRule,/background:var\(--quote-source-bg\)/);
+assert.doesNotMatch(quoteRule,/imessage-quote-compose-bubble/,'Sent-quote outline must not restyle composer previews');
+assert.match(css,/\.imessage-quote-compose-bubble > \.imessage-bubble-surface \{\s*background:var\(--quote-source-bg/);
+console.log('PASS: full text/media summaries, default reset with cached avatar samples, outlined quote styling');

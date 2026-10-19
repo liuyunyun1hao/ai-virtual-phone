@@ -2,7 +2,7 @@
 
 import { simpleLLMCall } from "../api-helpers";
 import { loadApiConfigs, resolveAuxiliaryApiConfig, resolveUserIdentity } from "../settings-storage";
-import { loadCharacters } from "../character-storage";
+import { loadInteractableCharacters as loadCharacters } from "../character-storage";
 import { MacroEngine } from "../macro-engine";
 import {
   addChatContact,

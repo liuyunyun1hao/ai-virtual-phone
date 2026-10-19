@@ -1,4 +1,4 @@
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { loadChatContacts } from "./chat-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 // lib/friend-request-storage.ts

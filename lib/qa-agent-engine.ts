@@ -1,3 +1,4 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 import {
     buildProviderRequest,
     nativeToolProtocolForConfig,
@@ -85,7 +86,7 @@ function parseSseEvents(buffer: string): { events: string[]; rest: string } {
 // 可用 localStorage 键 ai_phone_qa_stream_idle_ms 覆盖（调参/测试用）。
 function qaStreamIdleMs(): number {
     try {
-        const raw = Number(localStorage.getItem("ai_phone_qa_stream_idle_ms"));
+        const raw = Number(identityLocalStorage.getItem("ai_phone_qa_stream_idle_ms"));
         if (Number.isFinite(raw) && raw >= 1_000 && raw <= 600_000) return Math.floor(raw);
     } catch {
         // ignore
@@ -467,8 +468,6 @@ export type QaContextEntry = {
     content: string;
     /** user：随消息附带的图片（dataURL）；识图未开启时适配层会自动降级为占位文本 */
     images?: string[];
-    /** user：随消息附带的纯文本或代码附件 */
-    files?: { name: string; content: string }[];
     /** assistant：原生协议的工具调用（文本协议轮次不填，指令已在 content 里） */
     toolCalls?: LlmToolCall[];
     /** tool：来源调用 id（原生轮次才有）与工具名 */
@@ -478,13 +477,11 @@ export type QaContextEntry = {
     turn?: string;
 };
 
-/** user 条目内容：先拼接文本附件；带图片时再转多模态 parts。 */
+/** user 条目内容：带图片时转多模态 parts（识图未开启由适配层降级为占位） */
 function userEntryContent(entry: QaContextEntry): string | LLMContentPart[] {
-    const fileBlocks = (entry.files ?? []).map((file) => `\n\n[附件：${file.name}]\n${file.content}`).join("");
-    const textContent = `${entry.content}${fileBlocks}`;
-    if (!entry.images?.length) return textContent;
+    if (!entry.images?.length) return entry.content;
     return [
-        { type: "text", text: textContent },
+        { type: "text", text: entry.content },
         ...entry.images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
     ];
 }
@@ -542,16 +539,10 @@ export async function compactQaContext(entries: QaContextEntry[], options?: { si
     const lines = entries.map((entry) => {
         const head = entry.role === "user" ? "用户" : entry.role === "assistant" ? "助手" : `工具结果(${entry.name ?? "工具"})`;
         const body = entry.content.length > 4000 ? `${entry.content.slice(0, 4000)}…（截断）` : entry.content;
-        const files = entry.files?.length
-            ? `\n${entry.files.map((file) => {
-                const content = file.content.length > 4000 ? `${file.content.slice(0, 4000)}…（截断）` : file.content;
-                return `[附件：${file.name}]\n${content}`;
-            }).join("\n")}`
-            : "";
         const calls = entry.toolCalls?.length
             ? `\n[调用工具] ${entry.toolCalls.map((c) => `${c.name}(${JSON.stringify(c.args ?? {}).slice(0, 400)})`).join("；")}`
             : "";
-        return `【${head}】${body}${files}${calls}`;
+        return `【${head}】${body}${calls}`;
     });
     let transcript = lines.join("\n\n");
     if (transcript.length > 150_000) transcript = transcript.slice(-150_000);
@@ -706,60 +697,27 @@ async function callQaAgentNative(apiConfig: ApiConfig, history: QaEngineMessage[
 
         const messages: LlmRequestMessage[] = [{ role: "system", content: systemPrompt }, ...working];
         let result: LLMToolRequestResult;
-        const streamingEnabled = apiConfig.enableStreaming !== false;
-        if (streamingEnabled) {
-            try {
-                result = await sendLLMToolStreamRequest(
-                    apiConfig,
-                    null,
-                    messages,
-                    tools,
-                    [],
-                    { characterName: "工坊", userName: "用户" },
-                    { appId: "qa", signal: options?.signal, maxTokens: getQaMaxOutputTokens() ?? undefined },
-                    {
-                        async onDelta(delta) {
-                            await filter.push(delta);
-                        },
-                        async onReasoningDelta(delta) {
-                            await callbacks?.onReasoningDelta?.(delta);
-                        },
+        try {
+            result = await sendLLMToolStreamRequest(
+                apiConfig,
+                null,
+                messages,
+                tools,
+                [],
+                { characterName: "工坊", userName: "用户" },
+                { appId: "qa", signal: options?.signal, maxTokens: getQaMaxOutputTokens() ?? undefined },
+                {
+                    async onDelta(delta) {
+                        await filter.push(delta);
                     },
-                );
-            } catch (streamError) {
-                if (options?.signal?.aborted) throw streamError;
-                await callbacks?.onStreamFallback?.(formatQaErrorMessage(streamError));
-                const fallbackRequest = buildProviderRequest(apiConfig, null, messages, { tools, maxTokens: getQaMaxOutputTokens() ?? undefined });
-                const response = await fetchLlmPayload(fallbackRequest, { signal: options?.signal });
-                if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
-                const parsed = parseProviderResponse(fallbackRequest.providerKind, await response.json());
-                if (parsed.content) await filter.push(parsed.content);
-                result = {
-                    content: parsed.content || "",
-                    reasoning: parsed.reasoning,
-                    openRouterReasoningDetails: parsed.openRouterReasoningDetails,
-                    toolCalls: parsed.toolCalls || [],
-                    rawResponse: "",
-                    providerKind: fallbackRequest.providerKind,
-                };
-                // 流式失败转非流式成功的这一跳也要进工坊「调用记录」：主路径（sendLLMToolStreamRequest）
-                // 由聊天引擎按 appId 分流落日志，这条 fallback 是本文件自己发的请求，不补就漏一条，
-                // 而恰恰是刚出过流式故障、最需要排障记录的场景。
-                pushApiLog({
-                    characterName: "工坊",
-                    source: "qa",
-                    channel: "qa",
-                    model: apiConfig.defaultModel,
-                    messages: fallbackRequest.messagesForLog.map(m => ({
-                        role: m.role,
-                        content: typeof m.content === "string" ? m.content : "[vision: 含图片的多模态消息]",
-                    })),
-                    rawResponse: JSON.stringify({ content: result.content, reasoning: result.reasoning, toolCalls: result.toolCalls }),
-                    reasoning: parsed.reasoning?.trim() || undefined,
-                    usage: parsed.usage,
-                });
-            }
-        } else {
+                    async onReasoningDelta(delta) {
+                        await callbacks?.onReasoningDelta?.(delta);
+                    },
+                },
+            );
+        } catch (streamError) {
+            if (options?.signal?.aborted) throw streamError;
+            await callbacks?.onStreamFallback?.(formatQaErrorMessage(streamError));
             const fallbackRequest = buildProviderRequest(apiConfig, null, messages, { tools, maxTokens: getQaMaxOutputTokens() ?? undefined });
             const response = await fetchLlmPayload(fallbackRequest, { signal: options?.signal });
             if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
@@ -773,6 +731,9 @@ async function callQaAgentNative(apiConfig: ApiConfig, history: QaEngineMessage[
                 rawResponse: "",
                 providerKind: fallbackRequest.providerKind,
             };
+            // 流式失败转非流式成功的这一跳也要进工坊「调用记录」：主路径（sendLLMToolStreamRequest）
+            // 由聊天引擎按 appId 分流落日志，这条 fallback 是本文件自己发的请求，不补就漏一条，
+            // 而恰恰是刚出过流式故障、最需要排障记录的场景。
             pushApiLog({
                 characterName: "工坊",
                 source: "qa",

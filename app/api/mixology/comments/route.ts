@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 
 import { getCurrentAccount } from "@/lib/server/account-auth";
 import { getMixologySupabaseConfig, mixologyRestFetch } from "@/lib/server/mixology-supabase";
-import { createId } from "@/lib/id-utils";
 
 // 独家特调 · 评论 API：材料与配方共用，target_type + target_id 定位，支持楼中楼。
 
@@ -21,6 +20,10 @@ function cleanText(value: unknown, maxLength: number): string {
 
 function encodeFilter(value: string): string {
   return encodeURIComponent(value);
+}
+
+function createId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function parseType(value: unknown): HallType | null {

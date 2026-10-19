@@ -1,3 +1,5 @@
+import { identityDatabaseName } from "./identity-runtime";
+import { protectIdentityDatabase } from "./identity-db-guard";
 import Dexie from "dexie";
 import { CHECKPHONE_APP_SPECS, type CheckPhoneAppId, type CheckPhoneManifest, type CheckPhoneSnapshot } from "./checkphone-config";
 import { kvGet, kvRemove, kvSet, registerDynamicPrefix } from "./kv-db";
@@ -22,7 +24,8 @@ class CheckPhoneDatabase extends Dexie {
   snapshots!: Dexie.Table<CheckPhoneSnapshotRow, string>;
 
   constructor() {
-    super("AiPhoneCheckPhoneDB");
+    super(identityDatabaseName("AiPhoneCheckPhoneDB"));
+        protectIdentityDatabase(this, "AiPhoneCheckPhoneDB");
     this.version(1).stores({
       manifests: "characterId, updatedAt",
     });

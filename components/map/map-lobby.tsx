@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
 import { ArrowLeft, ChevronDown, MoreHorizontal, Plus, Play, Trash2 } from "lucide-react";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import {
   loadMapWorlds,
   getLatestSave,

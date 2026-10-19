@@ -84,8 +84,8 @@ function firstGradientColor(backgroundImage: string): CssColor | null {
   return gradient ? parseCssColor(gradient) : null;
 }
 
-/** 采样图片上部 40% 区域（状态栏所在位置）的平均颜色。 */
-function sampleImageColor(url: string): Promise<RgbColor | null> {
+/** 状态栏采样上部；键盘衔接底色单独采样下部，不能复用顶部颜色。 */
+function sampleImageColor(url: string, edge: "top" | "bottom" = "top"): Promise<RgbColor | null> {
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -100,7 +100,7 @@ function sampleImageColor(url: string): Promise<RgbColor | null> {
       const sampleH = Math.round(size * 0.4);
       let data: Uint8ClampedArray;
       try {
-        data = ctx.getImageData(0, 0, size, sampleH).data;
+        data = ctx.getImageData(0, edge === "bottom" ? size - sampleH : 0, size, sampleH).data;
       } catch {
         resolve(null);
         return;
@@ -133,7 +133,7 @@ export async function detectImageBrightness(url: string): Promise<"light" | "dar
  * 检测任意 DOM 元素的视觉背景颜色。
  * 依次检查 background-image（URL）和 background-color。
  */
-async function detectElementColor(el: HTMLElement): Promise<RgbColor | null> {
+async function detectElementColor(el: HTMLElement, edge: "top" | "bottom" = "top"): Promise<RgbColor | null> {
   const style = getComputedStyle(el);
   const backgroundColor = parseCssColor(style.backgroundColor);
   const solidBackground = backgroundColor && backgroundColor.a > 0
@@ -144,7 +144,7 @@ async function detectElementColor(el: HTMLElement): Promise<RgbColor | null> {
   const bgImage = style.backgroundImage;
   const imageUrl = firstBackgroundImageUrl(bgImage);
   if (imageUrl) {
-    const sampled = await sampleImageColor(imageUrl);
+    const sampled = await sampleImageColor(imageUrl, edge);
     if (sampled) {
       // 主题壁纸使用白色 linear-gradient 作为透明度蒙层，合成后才是屏幕实际颜色。
       const overlay = firstGradientColor(bgImage);
@@ -213,14 +213,23 @@ export async function updateStatusBarTone(shell: HTMLElement, activeApp: string 
   const updateId = ++latestToneUpdate;
   const elements = findBgElements(shell, activeApp);
   let color: RgbColor | null = null;
+  let backgroundElement: HTMLElement | null = null;
   for (const el of elements) {
     color = await detectElementColor(el);
+    if (color) backgroundElement = el;
     if (color || updateId !== latestToneUpdate) break;
   }
   color ||= parseCssColor(getComputedStyle(document.documentElement).getPropertyValue("--c-page-body-bg"));
   if (updateId !== latestToneUpdate) return;
   const resolvedColor = color || { r: 248, g: 247, b: 242 };
   const tone = colorBrightness(resolvedColor) < 128 ? "dark" : "light";
+
+  // Keep the mobile browser canvas in the same palette as the visible page.
+  // A nested white chat otherwise leaves the grey shell exposed around the
+  // keyboard. This is a separate token: never overwrite the user's theme.
+  const lowerColor = backgroundElement ? await detectElementColor(backgroundElement, "bottom") : null;
+  if (updateId !== latestToneUpdate) return;
+  document.documentElement.style.setProperty("--mobile-browser-canvas", toHex(lowerColor || resolvedColor));
 
   shell.style.setProperty(
     "--status-bar-color",

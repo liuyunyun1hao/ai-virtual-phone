@@ -61,7 +61,7 @@ import {
   updateBlackMarketTheater,
 } from "@/lib/black-market-client";
 import { useAccount } from "@/lib/account-context";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import type { BlackMarketOwnedTheater, BlackMarketRenderRule, BlackMarketSceneSession, BlackMarketState, BlackMarketTheaterProjectionEntry, BlackMarketTheaterTemplate } from "@/lib/black-market-types";

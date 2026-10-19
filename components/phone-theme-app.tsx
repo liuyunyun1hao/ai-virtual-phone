@@ -445,18 +445,12 @@ export function PhoneThemeApp({
             <p className="ts-14 text-[var(--c-icon)]">{"\u300C"}{SECTION_TITLES[section]}{"\u300D\u529F\u80FD\u5F00\u53D1\u4E2D\u2026"}</p>
           </div>
         )}
-      {/* accept 只声明系统能识别的标准 zip 类型 —— 两头都要照顾，缺一不可：
-          ① 安卓 Chrome / WebView / 微信内置：遇到「无 accept」的文件框只会弹
-             「相机 / 相册 / 文件」混合面板，用户进不去系统「文件管理」，也选不到 zip；
-          ② iOS：accept 里一旦带 .ai-theme / .aiphone 这类自定义后缀，「文件」选择器
-             会把没有注册 UTI 的类型直接置灰，反而选不中（这正是此处历史上不写 accept
-             的原因，但那样又牺牲了安卓）。
-          所以只保留两端都认识的标准类型。主题包导出已是标准 .zip，最终仍由
-          installThemePackageFile 校验包内 manifest.json，非法文件照样会被拒。 */}
+      {/* 不限定 accept：.ai-theme 是自定义后缀，iOS「文件」选择器会把
+          没有注册 UTI 的类型置灰导致选不中。放开后由 installThemePackageFile
+          校验包内 manifest.json，非法文件照样会被拒。 */}
       <input
         ref={importFileRef}
         type="file"
-        accept=".zip,application/zip"
         className="hidden"
         onChange={handleImportFileChange}
       />
@@ -473,9 +467,6 @@ export function PhoneThemeApp({
           <div className="flex flex-col gap-4">
             <p className="ts-13 leading-relaxed text-[var(--c-text)]">
               主题包会包含主题色、壁纸、图标、桌面组件、自定义组件，以及桌面图标和组件位置。
-            </p>
-            <p className="ts-11 leading-relaxed text-[var(--c-icon)]">
-              {"点「导入」会打开系统文件选择器，选择 .zip 主题包即可；若是旧的 .ai-theme / .aiphone 包，在文件管理器里把筛选切到「所有文件」后再选。"}
             </p>
             <div className="grid grid-cols-2 gap-8 py-1">
               <button

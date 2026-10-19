@@ -94,6 +94,8 @@ export const WIDGET_SIZE_CELLS: Record<WidgetSize, [number, number]> = {
 };
 
 export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
+  { type: "liveMusicSquare", name: "音乐 · 小方块", desc: "真实封面取色 · 播放暂停 · 打开播放器", size: "2x2", track: "freestyle" },
+  { type: "liveMusicWide", name: "音乐 · 横向卡", desc: "正在播放 + 四首队列快捷播放，共用音乐 App", size: "2x4", track: "freestyle" },
   // 2×4 wide
   { type: "music", name: "\u97F3\u4E50\u64AD\u653E\u5668", desc: "\u5C01\u9762 + \u6B4C\u540D + \u64AD\u653E\u63A7\u5236", size: "2x4" },
   { type: "interviewMagazine", name: "在场摘录", desc: "照片 + 本期访谈摘录翻页卡", size: "2x4" },

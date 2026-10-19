@@ -1,7 +1,9 @@
-import { buildSingleSourcePayload, getBackupModules } from "../data-management/backup";
+import { readLegacyIdentityHint, createIdentityBackupDirectory, validIdentityDirectory, validateOwnedSource, registerBackupUsers, legacyImportDirectory, routeLegacySource } from "../data-management/identity-backup";
+import { withBackupOperation } from "../data-management/operation-lock";
+import { collectMediaRefs, buildSingleSourcePayload, getBackupModules } from "../data-management/backup";
 import { importSource } from "../data-management/idb";
 import { createMediaCollector, utf8Bytes, type MediaResolver } from "../data-management/serializers";
-import type { DataModuleId, ModulePayload } from "../data-management/types";
+import type { IdentityBackupDirectory, ImportOptions, DataModuleId, ModulePayload } from "../data-management/types";
 import { kvGet, kvSet, registerKvMigration } from "../kv-db";
 import { sha256BlobHex, sha256TextHex } from "../sha256-stream";
 import type { CloudBackupConfig } from "./config";
@@ -77,7 +79,8 @@ export type CloudBackupManifestSource = {
 
 export type CloudBackupManifest = {
   format: "ai-phone-cloud-backup";
-  version: 1 | 2;
+  version: 1 | 2 | 3;
+  identities?: IdentityBackupDirectory;
   createdAt: string;
   origin: string;
   totalBytes: number;
@@ -212,6 +215,7 @@ export async function listCloudManifests(config: CloudBackupConfig): Promise<{ n
 }
 
 export type CloudBackupListItem = {
+  identities?: IdentityBackupDirectory;
   name: string;
   createdAt: string;
   totalBytes: number;
@@ -240,6 +244,7 @@ export async function listCloudBackups(config: CloudBackupConfig): Promise<Cloud
         createdAt: manifest.createdAt,
         totalBytes: manifest.totalBytes,
         totalRecords: manifest.totalRecords,
+        identities: manifest.identities,
         quarantine: m.quarantine || Boolean(manifest.anomaly),
       });
     } catch (error) {
@@ -278,7 +283,8 @@ function isRestorablePayload(value: unknown, moduleId: DataModuleId): value is M
 function validateManifest(manifest: Partial<CloudBackupManifest>): manifest is CloudBackupManifest {
   if (
     manifest.format !== "ai-phone-cloud-backup"
-    || (manifest.version !== 1 && manifest.version !== 2)
+    || (manifest.version !== 1 && manifest.version !== 2 && manifest.version !== 3)
+    || (manifest.version === 3 && !validIdentityDirectory(manifest.identities))
     || typeof manifest.createdAt !== "string"
     || !Number.isFinite(Date.parse(manifest.createdAt))
     || !isFiniteNonNegative(manifest.totalBytes)
@@ -328,12 +334,16 @@ async function loadManifest(config: CloudBackupConfig, name: string): Promise<Cl
   }
 }
 
-async function latestHealthyManifest(config: CloudBackupConfig): Promise<CloudBackupManifest | null> {
+function backupPartitionKey(identities: IdentityBackupDirectory | undefined, moduleIds: string[]): string {
+  return JSON.stringify([identities?.mode ?? "legacy", identities?.users.map(user => user.id).sort() ?? [], [...moduleIds].sort()]);
+}
+
+async function latestHealthyManifest(config: CloudBackupConfig, partition?: string): Promise<CloudBackupManifest | null> {
   const list = await listCloudManifests(config);
   for (const item of list) {
     if (item.quarantine) continue;
     const manifest = await loadManifest(config, item.name).catch(() => null);
-    if (manifest && !manifest.anomaly) return manifest;
+    if (manifest && !manifest.anomaly && (!partition || backupPartitionKey(manifest.identities, manifest.modules.map(module => module.id)) === partition)) return manifest;
   }
   return null;
 }
@@ -344,6 +354,7 @@ async function latestHealthyManifest(config: CloudBackupConfig): Promise<CloudBa
 export type CloudProgress = { percent: number; detail: string };
 
 export type CloudBackupOptions = {
+  scope?: "current" | "all";
   moduleIds?: DataModuleId[];
   force?: boolean;
   excludeMedia?: boolean;
@@ -379,7 +390,7 @@ export async function runCloudBackup(
   options: CloudBackupOptions = {},
 ): Promise<CloudBackupRunResult> {
   try {
-    return await withCloudOperationLock("backup", () => runCloudBackupInternal(config, options));
+    return await withBackupOperation(() => withCloudOperationLock("backup", () => runCloudBackupInternal(config, options)));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const state = loadCloudBackupState();
@@ -399,11 +410,12 @@ async function runCloudBackupInternal(
   // compress → upload → release). Holding every module's objects + JSON strings
   // at once (the old approach) doubled/tripled the library size in memory and
   // got the page killed/reloaded by mobile WebKit on large (200MB+) libraries.
-  const modules = getBackupModules(options.moduleIds);
+  const identities = createIdentityBackupDirectory(options.scope ?? config.backupScope ?? "all");
+  const modules = getBackupModules(options.moduleIds, identities);
   const state = loadCloudBackupState();
 
   // Last HEALTHY backup (cloud truth first): reuse its module parts + anomaly baseline.
-  const healthy = await latestHealthyManifest(config).catch(() => null);
+  const healthy = await latestHealthyManifest(config, backupPartitionKey(identities, modules.map(module => module.id))).catch(() => null);
   const existing = new Map<string, string[]>();
   for (const mod of healthy?.modules ?? []) {
     if (mod.parts?.length) existing.set(`${mod.id}|${mod.hash}`, mod.parts);
@@ -512,7 +524,7 @@ async function runCloudBackupInternal(
     });
   }
 
-  const combinedHash = await sha256TextHex(moduleHashes.join("|"));
+  const combinedHash = await sha256TextHex(JSON.stringify(identities) + "|" + moduleHashes.join("|"));
 
   // Change detection: nothing changed since last backup → skip (unless forced).
   // (With streaming, unchanged modules were already reused from the cloud — no
@@ -523,8 +535,8 @@ async function runCloudBackupInternal(
   }
 
   // Anomaly check vs the last HEALTHY backup (prefer cloud truth, fall back to local).
-  const baseBytes = healthy?.totalBytes ?? state.healthyBytes ?? 0;
-  const baseRecords = healthy?.totalRecords ?? state.healthyRecords ?? 0;
+  const baseBytes = healthy?.totalBytes ?? 0;
+  const baseRecords = healthy?.totalRecords ?? 0;
   const anomaly = (baseBytes > 0 && totalBytes < baseBytes * ANOMALY_BYTES_RATIO)
     || (baseRecords > 0 && totalRecords < baseRecords * ANOMALY_RECORDS_RATIO);
 
@@ -535,7 +547,8 @@ async function runCloudBackupInternal(
   const stamp = createdAt.replace(/[:.]/g, "-");
   const manifest: CloudBackupManifest = {
     format: "ai-phone-cloud-backup",
-    version: 2,
+    version: 3,
+    identities,
     createdAt,
     origin: typeof window !== "undefined" ? window.location.origin : "",
     totalBytes,
@@ -585,9 +598,18 @@ async function runCloudBackupInternal(
  *  object no longer referenced by a retained manifest. */
 async function rotateAndGc(config: CloudBackupConfig, keep: number, justWritten: string): Promise<void> {
   const all = await listCloudManifests(config);
-  const healthy = all.filter((m) => !m.quarantine);
-  const retained = healthy.slice(0, Math.max(2, keep));
-  const retainedNames = new Set(retained.map((m) => m.name));
+  // A current-user or partial-module backup cannot retire the last full backup.
+  const retainedNames = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const item of all) {
+    const manifest = await loadManifest(config, item.name).catch(() => null);
+    if (!manifest) return; // Unknown references: never collect their objects.
+    if (item.quarantine || manifest.anomaly) { retainedNames.add(item.name); continue; }
+    const partition = backupPartitionKey(manifest.identities, manifest.modules.map(module => module.id));
+    const count = counts.get(partition) ?? 0;
+    counts.set(partition, count + 1);
+    if (count < Math.max(2, keep)) retainedNames.add(item.name);
+  }
   retainedNames.add(justWritten);
 
   // First prove that every retained manifest is readable and collect all of its
@@ -669,15 +691,15 @@ async function listObjectsRecursive(config: CloudBackupConfig, prefix: string): 
 export async function restoreFromCloudManifest(
   config: CloudBackupConfig,
   manifestName: string,
-  options: { overwrite?: boolean; moduleIds?: DataModuleId[]; onProgress?: (p: CloudProgress) => void } = {},
+  options: ImportOptions & { moduleIds?: DataModuleId[]; onProgress?: (p: CloudProgress) => void } = {},
 ): Promise<{ added: number; skipped: number; overwritten: number; errors: string[] }> {
-  return withCloudOperationLock("restore", () => restoreFromCloudManifestInternal(config, manifestName, options));
+  return withBackupOperation(() => withCloudOperationLock("restore", () => restoreFromCloudManifestInternal(config, manifestName, options)));
 }
 
 async function restoreFromCloudManifestInternal(
   config: CloudBackupConfig,
   manifestName: string,
-  options: { overwrite?: boolean; moduleIds?: DataModuleId[]; onProgress?: (p: CloudProgress) => void },
+  options: ImportOptions & { moduleIds?: DataModuleId[]; onProgress?: (p: CloudProgress) => void },
 ): Promise<{ added: number; skipped: number; overwritten: number; errors: string[] }> {
   const rawOnProgress = options.onProgress ?? (() => {});
   // Remember the last percent so out-of-band events (media downloads inside the
@@ -690,6 +712,7 @@ async function restoreFromCloudManifestInternal(
   onProgress({ percent: 1, detail: "读取备份清单…" });
   const manifest = await loadManifest(config, manifestName);
   if (!manifest) throw new Error("找不到该备份清单。");
+  const identities = manifest.identities ?? await legacyImportDirectory(options);
   const selected = options.moduleIds && options.moduleIds.length > 0 ? new Set(options.moduleIds) : null;
   const total = { added: 0, skipped: 0, overwritten: 0, errors: [] as string[] };
 
@@ -739,7 +762,7 @@ async function restoreFromCloudManifestInternal(
   let mediaFetched = 0;
   let mediaTotalCount = 0; // set after module selection below
   const resolver: MediaResolver = async (ref) => {
-    if (invalidMedia.has(ref)) return null;
+    if (invalidMedia.has(ref)) throw new Error(`媒体缺失或损坏：${ref}`);
     const cached = mediaCache.get(ref);
     if (cached) {
       // refresh LRU position
@@ -759,7 +782,7 @@ async function restoreFromCloudManifestInternal(
     });
     if (!combined) {
       invalidMedia.add(ref);
-      return null;
+      throw new Error(`媒体缺失或损坏：${ref}`);
     }
     cacheMedia(ref, combined);
     return combined;
@@ -819,6 +842,27 @@ async function restoreFromCloudManifestInternal(
   let restoreDoneBytes = 0;
   const restorePercent = (fraction: number) => 2 + Math.min(97, 97 * (restoreDoneBytes + fraction) / restoreTotalBytes);
 
+  // Validate every selected object before writes. Keep only one decoded source alive.
+  for (const mod of selectedModules) {
+    const units = mod.sources?.length ? mod.sources : [mod];
+    for (const unit of units) {
+      onProgress({ percent: 1, detail: "校验备份完整性与身份归属…" });
+      const parts: Blob[] = [];
+      for (const path of unit.parts) {
+        const blob = await getObject(config, path);
+        if (!blob) throw new Error(mod.label + ": 云端对象缺失，未写入数据");
+        parts.push(blob);
+      }
+      const json = await gunzipBlob(new Blob(parts));
+      if (await sha256TextHex(json) !== unit.hash) throw new Error(mod.label + ": 完整性校验失败");
+      const payload: unknown = JSON.parse(json);
+      if (!isRestorablePayload(payload, mod.id)) throw new Error(mod.label + ": 数据结构不匹配");
+      if (manifest.version !== 3) for (const source of payload.sources) readLegacyIdentityHint(source, identities);
+    for (const source of payload.sources) for (const routed of manifest.version === 3 ? [source] : routeLegacySource(source, identities)) validateOwnedSource(routed, identities);
+      const refs = new Set<string>(); collectMediaRefs(payload, refs);
+      for (const ref of refs) if (!await fetchMediaBlob(ref)) throw new Error("媒体缺失或损坏，未写入数据：" + ref);
+    }
+  }
   for (const mod of manifest.modules) {
     if (selected && !selected.has(mod.id)) continue;
     const units = mod.sources && mod.sources.length > 0
@@ -870,6 +914,8 @@ async function restoreFromCloudManifestInternal(
         restoreDoneBytes += unit.bytes;
         continue;
       }
+      payload.sources = payload.sources.flatMap(source => manifest.version === 3 ? [source] : routeLegacySource(source, identities));
+      for (const source of payload.sources) validateOwnedSource(source, identities);
       // 写入之前先把这个数据源引用的媒体并发拉回来（缓存预算内）。
       if (unit.mediaRefs.length > 0) {
         await prefetchUnitMedia(unit.mediaRefs, (done, count, doneBytes) => {
@@ -896,7 +942,7 @@ async function restoreFromCloudManifestInternal(
           });
         };
         try {
-          const result = await importSource(payload.sources[sourceIndex], Boolean(options.overwrite), resolver, importProgress);
+          const result = await importSource(payload.sources[sourceIndex], payload.sources[sourceIndex].owner?.kind === "shared" ? Boolean(options.overwriteShared) : Boolean(options.overwrite), resolver, importProgress);
           total.added += result.added;
           total.skipped += result.skipped;
           total.overwritten += result.overwritten;
@@ -909,6 +955,7 @@ async function restoreFromCloudManifestInternal(
       restoreDoneBytes += unit.bytes;
     }
   }
+  await registerBackupUsers(identities);
   if (invalidMedia.size > 0) {
     total.errors.push(`${invalidMedia.size} 个媒体对象缺失或损坏，部分图片/文件可能丢失`);
   }

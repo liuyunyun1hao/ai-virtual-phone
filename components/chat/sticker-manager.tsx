@@ -3,8 +3,9 @@
 import { memo, useCallback, useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { Trash2, Plus, Smile, ImagePlus, Check, ChevronDown, ChevronRight, Info, Pencil, Sticker, Layers } from "lucide-react";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadChatAppCharacters as loadCharacters } from "@/lib/chat-app-characters";
 import type { Character } from "@/lib/character-types";
+import { parseStickerImport, stickerNameFromUrl, uniqueStickerNames } from "@/lib/sticker-import-parser";
 import {
     loadStickerPacks,
     createStickerPack,
@@ -12,6 +13,7 @@ import {
     addStickerToPack,
     addStickersToPack,
     addStickerByUrlToPack,
+    addStickerUrlsToPack,
     checkStickerBlob,
     updateStickerPackInfo,
     STICKER_PACK_NAME_MAX,
@@ -573,7 +575,7 @@ function PackEditor({ pack, onBack }: { pack: StickerPack; onBack: () => void })
                         <div className="flex flex-col items-center">
                             <button
                                 onClick={() => setShowAddDialog(true)}
-                                className="w-full aspect-square rounded-[20px] bg-transparent border-[1.5px] border-dashed border-[var(--c-icon)]/30 flex flex-col items-center justify-center gap-1.5 text-[var(--c-icon)] cursor-pointer opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5 transition-all active:scale-95"
+                                className="w-full aspect-square rounded-[20px] bg-transparent border-[1.5px] border-dashed border-[var(--c-icon)]/30 flex flex-col items-center justify-center gap-1.5 text-[var(--c-icon)] cursor-pointer opacity-80 hover:opacity-100 transition-opacity active:scale-95"
                             >
                                 <Plus size={26} strokeWidth={2}/>
                                 <span className="ts-11 font-medium">添加</span>
@@ -770,50 +772,8 @@ type BatchRow = {
     name: string;
 };
 
-const BATCH_STICKER_URL_RE = /https?:\/\/[^\s，。；;]+/i;
-
 function getStickerBaseName(filename: string): string {
     return filename.replace(/\.[^.]+$/, "").trim() || "表情";
-}
-
-function normalizeBatchStickerUrl(rawUrl: string): string | null {
-    const cleaned = rawUrl.trim().replace(/[，。；;]+$/g, "");
-    try {
-        const parsed = new URL(cleaned);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-        return parsed.toString();
-    } catch {
-        return null;
-    }
-}
-
-function getStickerNameFromUrl(url: string, index: number): string {
-    try {
-        const pathName = new URL(url).pathname;
-        const filename = decodeURIComponent(pathName.split("/").filter(Boolean).pop() || "");
-        return getStickerBaseName(filename) || `表情${index + 1}`;
-    } catch {
-        return `表情${index + 1}`;
-    }
-}
-
-function parseBatchStickerUrlRows(text: string): Array<{ name: string; url: string }> {
-    return text
-        .split(/\r?\n/)
-        .map((line, index) => {
-            const trimmed = line.trim();
-            if (!trimmed) return null;
-            const match = trimmed.match(BATCH_STICKER_URL_RE);
-            if (!match || match.index === undefined) return null;
-            const url = normalizeBatchStickerUrl(match[0]);
-            if (!url) return null;
-            const label = trimmed.slice(0, match.index).trim().replace(/[:：\s]+$/g, "");
-            return {
-                name: label || getStickerNameFromUrl(url, index),
-                url,
-            };
-        })
-        .filter((row): row is { name: string; url: string } => Boolean(row));
 }
 
 function BatchAddStickerDialog({
@@ -827,8 +787,10 @@ function BatchAddStickerDialog({
 }) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [rows, setRows] = useState<BatchRow[]>([]);
+    const urlInputRef = useRef<HTMLTextAreaElement>(null);
     const [urlText, setUrlText] = useState("");
     const [urlError, setUrlError] = useState<string | null>(null);
+    const [importNotice, setImportNotice] = useState("");
     const [adding, setAdding] = useState(false);
     const [progress, setProgress] = useState(0);
 
@@ -859,30 +821,35 @@ function BatchAddStickerDialog({
         if (fileInputRef.current) fileInputRef.current.value = "";
     };
 
+    const parsedText = useMemo(() => parseStickerImport(urlText), [urlText]);
+    const prepareUrls = (result: ReturnType<typeof parseStickerImport>): BatchRow[] => {
+        const queued = new Set(rows.filter(r => r.source === "url").map(r => r.url));
+        const parsed = uniqueStickerNames(result.rows.filter(r => !queued.has(r.url)), [...existingNames.current, ...rows.map(r => r.name)]);
+        return parsed.map((row, i) => ({
+            id: `urlrow_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+            source: "url" as const, url: row.url, name: row.name,
+        }));
+    };
+    const pendingCount = parsedText.rows.filter(r => !rows.some(queued => queued.source === "url" && queued.url === r.url)).length;
     const addUrls = () => {
-        const parsed = parseBatchStickerUrlRows(urlText);
-        if (parsed.length === 0) {
-            setUrlError("没有识别到可用的图片URL");
+        const result = parseStickerImport(urlInputRef.current?.value ?? urlText);
+        const next = prepareUrls(result);
+        if (next.length === 0) {
+            setUrlError(result.rows.length ? "这些链接已在待导入列表中" : "没有识别到可用的 http/https 图片链接，请检查粘贴内容");
             return;
         }
-        setRows(prev => [
-            ...prev,
-            ...parsed.map((row, i) => ({
-                id: `urlrow_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 5)}`,
-                source: "url" as const,
-                url: row.url,
-                name: row.name,
-            })),
-        ]);
-        setUrlText("");
+        setRows(prev => [...prev, ...next]);
+        if (!result.invalid) setUrlText("");
         setUrlError(null);
+        const skipped = result.duplicates + result.rows.length - next.length;
+        setImportNotice(`已识别 ${next.length} 张${skipped ? `，跳过 ${skipped} 个重复链接` : ""}${result.invalid ? `，${result.invalid} 个链接无效` : ""}。重名会自动编号，请确认名称和预览。`);
     };
 
     const setRowName = (id: string, name: string) => setRows(prev => prev.map(r => r.id === id ? { ...r, name } : r));
     const removeRow = (id: string) => setRows(prev => prev.filter(r => r.id !== id));
     const resetToFilenames = () => setRows(prev => prev.map((r, i) => ({
         ...r,
-        name: r.source === "file" && r.file ? getStickerBaseName(r.file.name) : getStickerNameFromUrl(r.url, i),
+        name: r.source === "file" && r.file ? getStickerBaseName(r.file.name) : stickerNameFromUrl(r.url, i),
     })));
     const numberNames = () => setRows(prev => prev.map((r, i) => ({ ...r, name: `表情${i + 1}` })));
 
@@ -904,28 +871,51 @@ function BatchAddStickerDialog({
     };
 
     const readyCount = rows.filter(r => !rowError(r)).length;
-    const allValid = rows.length > 0 && readyCount === rows.length;
-
     const handleSubmit = async () => {
-        if (!allValid || adding) return;
+        if (adding) return;
+        // Native mobile paste/autofill can update the textarea before React's change
+        // notification. Read its current value, and import directly without a staging click.
+        const result = parseStickerImport(urlInputRef.current?.value ?? urlText);
+        const pending = prepareUrls(result);
+        const allRows = [...rows, ...pending];
+        const validRows = [...rows.filter(r => !rowError(r)), ...pending];
+        if (!validRows.length) {
+            setUrlError("没有可添加的表情，请检查描述和 http/https 链接，或修正列表中标出的名称。");
+            return;
+        }
+        setRows(allRows);
+        setUrlText("");
+        if (result.invalid) setImportNotice(`${result.invalid} 个无效链接未添加；可识别的条目已进入列表。`);
         setAdding(true);
         setProgress(0);
-        const fileRows = rows.filter((r): r is BatchRow & { file: File } => r.source === "file" && Boolean(r.file));
-        const urlRows = rows.filter(r => r.source === "url");
-        const total = rows.length;
-        if (fileRows.length > 0) {
-            await addStickersToPack(
-                packId,
-                fileRows.map(r => ({ name: r.name.trim(), blob: r.file })),
-                (done) => setProgress(Math.round((done / total) * 100)),
-            );
+        setUrlError(null);
+        const fileRows = validRows.filter((r): r is BatchRow & { file: File } => r.source === "file" && Boolean(r.file));
+        const urlRows = validRows.filter(r => r.source === "url");
+        const total = validRows.length;
+        const completed = new Set<string>();
+        try {
+            if (urlRows.length) {
+                addStickerUrlsToPack(packId, urlRows);
+                urlRows.forEach(r => completed.add(r.id));
+                setProgress(Math.round(urlRows.length / total * 100));
+            }
+            if (fileRows.length > 0) {
+                const result = await addStickersToPack(
+                    packId,
+                    fileRows.map(r => ({ name: r.name.trim(), blob: r.file })),
+                    (done) => setProgress(Math.round(((urlRows.length + done) / total) * 100)),
+                );
+                fileRows.forEach((r, i) => { if (!result.failedIndexes.includes(i)) completed.add(r.id); });
+            }
+            if (completed.size === allRows.length && !result.invalid) onDone();
+            else setUrlError(`已添加 ${completed.size} 张，剩余 ${allRows.length - completed.size} 张待修正${result.invalid ? `，另有 ${result.invalid} 个无效链接，请检查原始内容` : ""}。`);
+        } catch (error) {
+            setUrlError(`已添加 ${completed.size} 张；${error instanceof Error ? error.message : "保存失败，请重试"}`);
+        } finally {
+            setRows(prev => prev.filter(r => !completed.has(r.id)));
+            existingNames.current = new Set((loadStickerPacks().find(p => p.id === packId)?.stickers ?? []).map(s => s.name.trim().toLowerCase()));
+            setAdding(false);
         }
-        urlRows.forEach((row, i) => {
-            addStickerByUrlToPack(packId, row.name.trim(), row.url);
-            setProgress(Math.round(((fileRows.length + i + 1) / total) * 100));
-        });
-        setAdding(false);
-        onDone();
     };
 
     return (
@@ -945,7 +935,7 @@ function BatchAddStickerDialog({
                         onChange={e => addFiles(e.target.files)}
                     />
 
-                    <div className="flex flex-col gap-3 text-left w-full">
+                    <fieldset disabled={adding} className="flex flex-col gap-3 text-left w-full min-w-0">
                         {rows.length === 0 ? (
                             <button
                                 onClick={() => fileInputRef.current?.click()}
@@ -966,7 +956,9 @@ function BatchAddStickerDialog({
                         <div className="flex flex-col gap-1.5">
                             <label className="menu-desc ml-1">批量URL</label>
                             <textarea
+                                ref={urlInputRef}
                                 value={urlText}
+                                onInput={e => { setUrlText(e.currentTarget.value); setUrlError(null); }}
                                 onChange={e => { setUrlText(e.target.value); setUrlError(null); }}
                                 placeholder={"贴贴：https://example.com/a.jpg\n可爱 https://example.com/b.gif"}
                                 className="ui-input"
@@ -974,10 +966,12 @@ function BatchAddStickerDialog({
                                 style={{ resize: "vertical", minHeight: 88 }}
                             />
                             <div className="flex items-center justify-between gap-2">
-                                <span className="ts-11 opacity-60">每行一个，支持“名称：URL”或“名称 URL”</span>
-                                <button type="button" className="ui-chip" onClick={addUrls} disabled={adding || !urlText.trim()}>添加URL</button>
+                                <span className="ts-11 opacity-60">支持描述＋链接、跨行、同一行多条、Markdown、JSON</span>
+                                <button type="button" className="ui-chip shrink-0 whitespace-nowrap" onClick={addUrls} disabled={adding || !urlText.trim()}>预览并编辑</button>
                             </div>
+                            {urlText.trim() && <span role="status" className="ts-11 ml-1">{pendingCount ? `已识别 ${pendingCount} 张，可直接点下方添加；预览编辑是可选的。` : "未发现新的可用链接，可点下方按钮检查。"}</span>}
                             {urlError && <span className="ts-11 ml-1" style={{ color: "var(--c-danger)" }}>{urlError}</span>}
+                            {importNotice && <span role="status" className="ts-11 ml-1 opacity-70">{importNotice}</span>}
                         </div>
 
                         {rows.length > 0 ? (
@@ -987,7 +981,7 @@ function BatchAddStickerDialog({
                                     return (
                                         <div key={r.id} className="flex items-center gap-3">
                                             <div className="w-12 h-12 shrink-0 rounded-xl overflow-hidden bg-black/5 dark:bg-white/10 flex items-center justify-center">
-                                                <img src={r.url} alt="" className="w-full h-full object-contain" />
+                                                <img src={r.url} alt="预览暂不可用" loading="lazy" decoding="async" className="w-full h-full object-contain" />
                                             </div>
                                             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                                                 <input
@@ -1014,7 +1008,7 @@ function BatchAddStickerDialog({
                                 })}
                             </div>
                         ) : null}
-                    </div>
+                    </fieldset>
                 </div>
 
                 <div className="modal-footer">
@@ -1022,9 +1016,9 @@ function BatchAddStickerDialog({
                     <button
                         className="ui-btn ui-btn-primary"
                         onClick={handleSubmit}
-                        disabled={!allValid || adding}
+                        disabled={(!readyCount && !urlText.trim()) || adding}
                     >
-                        {adding ? `添加中 ${progress}%` : rows.length > 0 ? `全部添加 (${readyCount}/${rows.length})` : "全部添加"}
+                        {adding ? `添加中 ${progress}%` : pendingCount ? `全部添加 (${readyCount + pendingCount})` : rows.length > 0 ? `添加可用项 (${readyCount}/${rows.length})` : "全部添加"}
                     </button>
                 </div>
             </div>

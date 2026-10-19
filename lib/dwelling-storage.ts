@@ -1,3 +1,6 @@
+import { identityDatabaseName } from "./identity-runtime";
+import { protectIdentityDatabase } from "./identity-db-guard";
+import { identityLocalStorage } from "@/lib/identity-runtime";
 import Dexie from "dexie";
 
 // ── Types ──────────────────────────────────────
@@ -63,7 +66,8 @@ class DwellingDatabase extends Dexie {
     itemHtml!: Dexie.Table<DwellingItemHtmlRow, string>;
 
     constructor() {
-        super("AiPhoneDwellingDB");
+        super(identityDatabaseName("AiPhoneDwellingDB"));
+        protectIdentityDatabase(this, "AiPhoneDwellingDB");
         this.version(3).stores({
             layouts: "characterId",
             itemHtml: "id, characterId",
@@ -206,7 +210,7 @@ const DWELLING_IMAGE_TOGGLE_KEY = "dwelling_image_gen_enabled";
 export function loadDwellingImageEnabled(): boolean {
     if (typeof window === "undefined") return false;
     try {
-        return localStorage.getItem(DWELLING_IMAGE_TOGGLE_KEY) !== "0";
+        return identityLocalStorage.getItem(DWELLING_IMAGE_TOGGLE_KEY) !== "0";
     } catch {
         return true;
     }
@@ -214,7 +218,7 @@ export function loadDwellingImageEnabled(): boolean {
 
 export function saveDwellingImageEnabled(enabled: boolean): void {
     try {
-        localStorage.setItem(DWELLING_IMAGE_TOGGLE_KEY, enabled ? "1" : "0");
+        identityLocalStorage.setItem(DWELLING_IMAGE_TOGGLE_KEY, enabled ? "1" : "0");
     } catch { /* ignore */ }
 }
 

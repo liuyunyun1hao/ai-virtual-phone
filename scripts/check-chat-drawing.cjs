@@ -1,0 +1,150 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict'),ts=require('typescript');
+const root=path.resolve(__dirname,'..');
+const compile=file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+function load(file,mocks={}){const exports={};vm.runInNewContext(compile(file),{exports,require:id=>{if(!(id in mocks))throw Error(id);return mocks[id]},AbortController,DOMException,setTimeout,clearTimeout});return exports;}
+const core=load('lib/chat-drawing.ts');
+let captured;
+const engine={buildChatPromptMessages:async()=>({llmMessages:[{role:'system',content:'测试角色人设'}],config:{enableImageRecognition:true},preset:null,character:{name:'小林'},userIdentity:{name:'你'}}),sendLLMStreamRequest:async(...args)=>{captured=args;await args[6].onDelta(JSON.stringify(mark));}};
+const model=load('lib/chat-drawing-model.ts',{'./chat-engine':engine,'./chat-drawing':core});
+const mark={intent:'只添左侧一小段轮廓',color:'#428e70',width:4,points:[[220,220,.4],[205,250,.6],[210,280,.5]]};
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+async function pure(){
+ assert.ok(core.parseDrawingStroke(mark,'c',1));
+ for(const brush of ['pen','pencil','watercolor']) { const s=core.parseDrawingStroke({...mark,brush,width:60,opacity:.25},'c',1);assert.equal(s.brush,brush);assert.equal(s.width,60);assert.equal(s.opacity,.25); }
+ assert.equal(core.parseDrawingStroke(mark,'c',1).brush,'pen','legacy strokes default to original pen');
+ assert.equal(core.parseDrawingStroke({...mark,width:999,opacity:-1},'c',1).width,80);
+ assert.equal(core.parseDrawingStroke({...mark,width:999,opacity:-1},'c',1).opacity,.05);
+ let remarks=[],inks=0;
+ await model.runDrawingTurn(async push=>{await push(JSON.stringify(mark));await push('{"type":"comment","text":"这像一只猫？"}');},'c',new AbortController().signal,async()=>{inks++},100,{mode:'solo',onComment:t=>remarks.push(t)});
+ assert.equal(inks,0,'spectator rejects model ink');assert.deepEqual(remarks,['这像一只猫？']);
+ await assert.rejects(model.runDrawingTurn(async push=>{await push('{"type":"comment","text":"等我想想"}');await new Promise(()=>{})},'c',new AbortController().signal,async()=>{},30,{mode:'together',onComment:()=>{}}),/没有收到有效笔迹/,'comments cannot extend first-ink deadline');
+ await assert.rejects(model.runDrawingTurn(async()=>new Promise(()=>{}),'c',new AbortController().signal,async()=>{},30,{mode:'solo'}),/没有收到评论/);
+ remarks=[];await model.runDrawingTurn(async push=>{await push(JSON.stringify({...mark,comment:'我给它添个耳朵'}));},'c',new AbortController().signal,async()=>{},100,{onComment:t=>remarks.push(t)});assert.deepEqual(remarks,['我给它添个耳朵']);
+ for (const color of core.DRAWING_PALETTE) for (const width of core.DRAWING_WIDTHS) {
+   const stroke=core.parseDrawingStroke({...mark,color,width},'c',1);
+   assert.equal(stroke.color,color); assert.equal(stroke.width,width);
+ }
+ assert.equal(core.parseDrawingStroke({...mark,points:[[0,0],[900,900]]},'c',1),null);
+ let parsed=[];const push=core.drawingObjectStream(async d=>parsed.push(d));const json=JSON.stringify(mark);await push('```json\n'+json.slice(0,35));assert.equal(parsed.length,0);await push(json.slice(35)+'\n```');assert.equal(parsed.length,1);
+ await assert.rejects(model.runDrawingTurn(async(push,signal)=>{await push('正在思考');await new Promise(()=>{})},'c',new AbortController().signal,async()=>{},30),/没有收到有效笔迹/);
+ let count=0;await model.runDrawingTurn(async push=>{await push(JSON.stringify(mark));},'c',new AbortController().signal,async()=>{count++;await delay(65)},30);assert.equal(count,1,'valid stroke can finish after first-ink deadline');
+ count=0;await model.runDrawingTurn(async push=>{await push(Array.from({length:9},()=>JSON.stringify(mark)).join('\n'))},'c',new AbortController().signal,async()=>{count++},100);assert.equal(count,6,'one creative turn cannot grow into unlimited strokes');
+ const longMark={...mark,points:[[0,100,.5],[600,100,.5]]};count=0;
+ await model.runDrawingTurn(async push=>{await push(Array.from({length:5},()=>JSON.stringify(longMark)).join('\n'))},'c',new AbortController().signal,async()=>{count++},100);assert.equal(count,3,'1800px whole-turn budget still enforced');
+ const tools=[];await model.runDrawingTurn(async push=>{for(const [brush,color,width,opacity] of [['pencil','#428e70',3,.8],['watercolor','#e94857',45,.3]])await push(JSON.stringify({...mark,brush,color,width,opacity}));},'c',new AbortController().signal,async s=>{tools.push([s.brush,s.color,s.width,s.opacity])},100);
+ assert.deepEqual(tools,[['pencil','#428e70',3,.8],['watercolor','#e94857',45,.3]],'a turn can switch actual brush/color/width/opacity');
+ const cancel=new AbortController();count=0;const run=model.runDrawingTurn(async push=>{await delay(45);await push(JSON.stringify(mark))},'c',cancel.signal,async()=>{count++},100);cancel.abort();await assert.rejects(run);await delay(65);assert.equal(count,0,'late output after close cannot paint');
+ await model.requestDrawingTurn({session:{id:'s',contactId:'c'},characterId:'c',history:[],image:'data:image/png;base64,TEST',strokes:[{...mark,author:'user',width:8}],signal:new AbortController().signal,onStroke:async()=>{}});
+ assert.ok(captured[2].at(-1).content[0].text.includes('"width":8'),'user pen width reaches character');
+ assert.ok(captured[2].at(-1).content[0].text.includes('"color":"#428e70"'),'user pen color reaches character');
+ assert.ok(captured[2].some(m=>m.role==='system' && m.content.includes(core.DRAWING_BRUSH_RULES)), 'brush matching rule reaches actual request');
+ assert.ok(!core.DRAWING_RULES.includes('不必跟随用户'));
+ assert.ok(core.DRAWING_RULES.includes('每轮表达一个创作意图'));
+ assert.ok(captured[2].at(-1).content[0].text.includes('表达一个创作意图'));
+ assert.ok(captured[2].some(m=>m.content==='测试角色人设'));
+ assert.equal(captured[2].at(-1).content[1].image_url.url,'data:image/png;base64,TEST','current board really sent as vision input');
+ console.log('PASS core: validation, split stream, first ink deadline, long stroke completion, 6-stroke/1800px turn budget, tool switching, cancellation, board vision + persona.');
+}
+const read=(pkg,file)=>fs.readFileSync(path.join(path.dirname(require.resolve(pkg,{paths:[root]})),file),'utf8');
+async function browserCheck(){
+ const browser=await require(process.env.PLAYWRIGHT_MODULE||'playwright').chromium.launch({headless:true,executablePath:process.env.CHAT_TEST_BROWSER});
+ try{
+ const page=await browser.newPage({viewport:{width:390,height:844},hasTouch:true}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.setContent('<style>*{box-sizing:border-box}body{margin:0}#root{position:relative;width:390px;height:844px}button{font:inherit}svg{width:22px;height:22px}</style><div id="root"></div>');
+ await page.addStyleTag({content:fs.readFileSync(path.join(root,'styles/chat-drawing.css'),'utf8')});
+ const modules={react:read('react','cjs/react.production.js'),'react/jsx-runtime':read('react','cjs/react-jsx-runtime.production.js'),'react-dom':read('react-dom','cjs/react-dom.production.js'),'react-dom/client':read('react-dom','cjs/react-dom-client.production.js'),scheduler:read('scheduler','cjs/scheduler.production.js'),'@/lib/chat-drawing':compile('lib/chat-drawing.ts'),board:compile('components/chat/drawing-board.tsx')};
+ await page.addScriptTag({content:`const modules=${JSON.stringify(modules)},cache={};window.store={};window.calls=0;window.sent=[];
+ function require(id){if(id==='@/lib/kv-db')return {kvGet:k=>window.store[k]||null,kvSet:(k,v)=>window.store[k]=v,kvRemove:k=>delete window.store[k]};
+ if(id==='@/lib/chat-drawing-group')return {requestGroupDrawingRound:()=>{throw Error('unexpected group call')}};
+ if(id==='@/lib/abort-utils')return {};
+ if(id==='lucide-react')return Object.fromEntries(['Check','ChevronLeft','Eraser','User','Users','ListOrdered'].map(name=>[name,()=>require('react').createElement('svg',null,require('react').createElement('path',{d:'M4 12h16',stroke:'currentColor'}))]));
+ if(id==='@/lib/chat-drawing-model')return {requestDrawingTurn:async args=>{window.calls++;await new Promise((resolve,reject)=>{window.release=resolve;args.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true})});if(args.signal.aborted)return;args.onComment?.(args.mode==='solo'?'这像一只猫？':'我给它添个耳朵');if(args.mode==='solo')return;await args.onStroke({...${JSON.stringify(mark)},id:'char-stroke',author:'c',seed:1});}};
+ if(cache[id])return cache[id].exports;const m={exports:{}};cache[id]=m;new Function('module','exports','require',modules[id])(m,m.exports,require);return m.exports;}
+ const R=require('react'),app=require('react-dom/client').createRoot(document.getElementById('root'));function Harness(){const [open,setOpen]=R.useState(true);window.openBoard=()=>setOpen(true);return open?R.createElement(require('board').DrawingBoard,{session:{id:'s',contactId:'c'},history:[],characters:[{id:'c',name:'小林'}],onClose:()=>setOpen(false),onSend:(image,summary,process)=>{window.sent.push({image,summary,process});return true}}):null}app.render(R.createElement(Harness));`});
+ const canvas=page.locator('canvas');await canvas.waitFor();const bounds=await canvas.boundingBox();assert.ok(bounds.height>bounds.width,'portrait board');
+ async function stroke(){const bounds=await canvas.boundingBox();await page.mouse.move(bounds.x+bounds.width*.3,bounds.y+bounds.height*.3);await page.mouse.down();await page.mouse.move(bounds.x+bounds.width*.45,bounds.y+bounds.height*.4,{steps:15});await page.mouse.up();}
+ const touch=await page.context().newCDPSession(page), cx=bounds.x+bounds.width/2,cy=bounds.y+bounds.height/2;
+ const fingers=d=>[{x:cx-d,y:cy,id:1},{x:cx+d,y:cy,id:2}];
+ const blank=await canvas.evaluate(c=>c.toDataURL());
+ const fixedFrame=await page.locator('.drawing-viewport').boundingBox();
+ await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(30)});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers(60)});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ assert.ok((await canvas.boundingBox()).width>bounds.width*1.9,'two fingers enlarge canvas');
+ assert.deepEqual(await page.locator('.drawing-viewport').boundingBox(),fixedFrame,'frame remains fixed during zoom');
+ assert.equal(await page.locator('.drawing-viewport').evaluate(el=>getComputedStyle(el).overflow),'hidden','paper is clipped inside frame');
+ assert.equal(await canvas.evaluate(c=>c.toDataURL()),blank,'pinch leaves no ink');
+ const zoomBounds=await canvas.boundingBox();
+ await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(30)});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers(30).map(p=>({...p,x:p.x+30}))});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ assert.ok((await canvas.boundingBox()).x>zoomBounds.x+20,'two fingers pan paper inside frame');
+ assert.deepEqual(await page.locator('.drawing-viewport').boundingBox(),fixedFrame,'panning keeps frame fixed');
+ await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(30).map(p=>({...p,x:p.x+30}))});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers(30)});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await page.waitForTimeout(3100);assert.equal(await page.evaluate(()=>window.calls),0,'pinch does not call model');
+ await stroke();const zoomStroke=await page.evaluate(()=>JSON.parse(window.store['chat-drawing-draft:s']).strokes.at(-1));
+ assert.ok(Math.abs(zoomStroke.points[0][0]-180)<2 && Math.abs(zoomStroke.points[0][1]-240)<2,'zoomed drawing maps to canonical coordinates');
+ await page.getByRole('button',{name:'撤回上一笔'}).click();
+ await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:fingers(60)});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:fingers(30)});
+ await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ assert.ok(Math.abs((await canvas.boundingBox()).width-bounds.width)<2,'pinch shrinks canvas');
+ await stroke();assert.equal(await page.evaluate(()=>window.calls),0,'solo does not call immediately');
+ await page.getByText('小林在看').waitFor();const soloImage=await canvas.evaluate(c=>c.toDataURL());await stroke();assert.equal(await canvas.evaluate(c=>c.toDataURL()),soloImage,'solo waits for comment before next drawing');
+ await page.evaluate(()=>window.release());await page.getByText('这像一只猫？',{exact:true}).waitFor();await page.getByText(/你先画|你在画/).waitFor();await page.locator('.drawing-comment').waitFor({state:'hidden'});assert.equal(await canvas.evaluate(c=>c.toDataURL()),soloImage,'spectator leaves board unchanged');await page.evaluate(()=>window.calls=0);
+ await page.getByRole('button',{name:'与角色共画',exact:true}).click();await stroke();
+ await page.waitForTimeout(1600);assert.equal(await page.evaluate(()=>window.calls),0,'no immediate handoff');
+ await stroke();await page.waitForTimeout(1700);assert.equal(await page.evaluate(()=>window.calls),0,'new stroke resets full three seconds');
+ await page.getByRole('button',{name:'光谱选色',exact:true}).click();await page.waitForTimeout(3200);assert.equal(await page.evaluate(()=>window.calls),0,'spectrum pauses handoff');
+ await page.getByRole('slider',{name:'色相',exact:true}).fill('315');
+ await page.getByRole('slider',{name:'饱和度',exact:true}).fill('65');
+ await page.getByRole('slider',{name:'明度',exact:true}).fill('85');
+ await page.screenshot({path:path.join(root,'tmp/drawing-spectrum-check.png')});
+ await page.getByRole('button',{name:'光谱选色',exact:true}).click();
+ await page.getByRole('button',{name:'水彩笔刷',exact:true}).click();
+ await page.getByRole('slider',{name:'画笔粗细',exact:true}).fill('48');
+ await page.getByRole('slider',{name:'画笔不透明度',exact:true}).fill('40');
+ await stroke();
+ const saved=await page.evaluate(()=>JSON.parse(window.store['chat-drawing-draft:s']).strokes.at(-1));assert.equal(saved.brush,'watercolor');assert.equal(saved.width,48);assert.equal(saved.opacity,.4);assert.notEqual(saved.color,'#191919');
+ await page.getByText('小林在看').waitFor();
+ const before=await canvas.evaluate(c=>c.toDataURL());await stroke();assert.equal(await canvas.evaluate(c=>c.toDataURL()),before,'user cannot draw during char turn');assert.equal(await page.evaluate(()=>window.calls),1);
+ await page.evaluate(()=>window.release());
+ await page.getByText('我给它添个耳朵',{exact:true}).waitFor();
+ assert.equal(await page.getByText('小林在画',{exact:true}).count(),1,'painter status remains visible alongside comment');
+ const typography=await page.evaluate(()=>['.drawing-status','.drawing-comment','.drawing-comment strong'].map(s=>({size:getComputedStyle(document.querySelector(s)).fontSize,align:getComputedStyle(document.querySelector(s)).textAlign})));
+ assert.ok(typography.every(t=>t.size==='13px'&&t.align==='left'),'unified size and left alignment');
+ await page.getByText(/你先画|你在画/).waitFor();await page.locator('.drawing-comment').waitFor({state:'hidden'});assert.equal(await page.locator('.drawing-comment').count(),0,'returns to current status after comment');
+ assert.equal(await page.locator('.drawing-conversation').innerText().then(t=>/3 秒|三秒|停笔/.test(t)),false,'no timing instructions in status');
+ assert.notEqual(await canvas.evaluate(c=>c.toDataURL()),before,'char stroke visibly renders');
+ const rendering=await page.evaluate(()=>{
+   const {drawBoard}=require('@/lib/chat-drawing'), c=document.createElement('canvas');c.width=600;c.height=800;
+   const stroke={id:'test',author:'user',seed:17,color:'#347bc1',width:42,points:[[90,180,.5],[210,185,.7],[390,175,.4]]};
+   const images=[];
+   for(const brush of ['pen','pencil','watercolor']) {drawBoard(c,[{...stroke,brush}]);const a=c.toDataURL();drawBoard(c,[{...stroke,brush}]);if(c.toDataURL()!==a)throw Error('unstable grain');images.push(a);}
+   drawBoard(c,[{...stroke,opacity:.2}]);const alpha=c.toDataURL();
+   const legacy={...stroke,width:4};drawBoard(c,[legacy]);const a=c.toDataURL();drawBoard(c,[{...legacy,brush:'pen',opacity:1}]);if(c.toDataURL()!==a)throw Error('legacy pen changed');
+   const strokes=['pen','pencil','watercolor'].map((brush,i)=>({...stroke,brush,id:String(i),points:stroke.points.map(p=>[p[0],p[1]+i*180,p[2]])}));
+   drawBoard(c,strokes);const full=c.toDataURL();drawBoard(c,strokes.slice(0,2));drawBoard(c,strokes);if(c.toDataURL()!==full)throw Error('undo cache mismatch');
+   return {distinct:new Set(images).size,alphaDistinct:alpha!==images[0],sample:c.toDataURL()};
+ });
+ assert.equal(rendering.distinct,3);assert.equal(rendering.alphaDistinct,true);
+ fs.writeFileSync(path.join(root,'tmp/drawing-brush-samples.png'),Buffer.from(rendering.sample.split(',')[1],'base64'));
+ await page.screenshot({path:path.join(root,'tmp/drawing-board-check.png')});
+ await page.getByRole('button',{name:'返回并保留草稿'}).click();assert.equal(await canvas.count(),0);await page.evaluate(()=>window.openBoard());await canvas.waitFor();
+ assert.equal(await page.evaluate(()=>window.calls),1,'opening saved draft does not call model');
+ await page.getByText(/你先画|你在画/).waitFor();assert.equal(await page.locator('.drawing-comment').count(),0,'old draft comment is not a live status');
+ await page.getByRole('button',{name:'发送画板',exact:true}).click();
+ const result=await page.evaluate(()=>({sent:window.sent,keys:Object.keys(window.store)}));assert.equal(result.sent.length,1);assert.match(result.sent[0].image,/^data:image\/png;base64/);assert.match(result.sent[0].summary,/小林/);assert.equal(result.keys.length,0);
+ assert.match(result.sent[0].summary,/这像一只猫/);assert.match(result.sent[0].summary,/添个耳朵/);
+ assert.equal(result.sent[0].process.version,1);assert.equal(result.sent[0].process.comments.length,2);assert.ok(result.sent[0].process.strokes.some(s=>s.author==='user'));assert.ok(result.sent[0].process.strokes.some(s=>s.author==='c'));assert.ok(result.sent[0].process.comments[0].createdAt>0);
+ await page.evaluate(()=>window.openBoard());await canvas.waitFor();await page.getByRole('button',{name:'与角色共画',exact:true}).click();await stroke();await page.getByText('小林在看').waitFor();
+ await page.getByRole('button',{name:'发送画板',exact:true}).click();await page.evaluate(()=>window.release());await page.waitForTimeout(100);assert.equal(await canvas.count(),0,'send stops a pending turn without late paint');
+ await page.evaluate(()=>window.openBoard());await canvas.waitFor();await page.getByRole('button',{name:'与角色共画',exact:true}).click();await stroke();
+ const callsBefore=await page.evaluate(()=>window.calls);await page.getByRole('button',{name:'单人绘图',exact:true}).click();await page.waitForTimeout(3100);assert.equal(await page.evaluate(()=>window.calls),callsBefore,'mode switch cancels scheduled handoff');
+ await page.getByRole('button',{name:'与角色共画',exact:true}).click();await stroke();await page.getByRole('button',{name:'返回并保留草稿',exact:true}).click();await page.waitForTimeout(3100);assert.equal(await page.evaluate(()=>window.calls),callsBefore,'close cancels scheduled handoff');
+ assert.deepEqual(errors,[]);console.log('PASS UI: portrait, solo, 3s debounce/reset, spectrum pause, brush settings persistence, distinct stable brush rendering/opacity, legacy pen, undo cache, input lock, draft/send, cancel on send/close/mode switch.');
+ }finally{await browser.close()}
+}
+(async()=>{await pure();await browserCheck()})().catch(e=>{console.error(e);process.exitCode=1});

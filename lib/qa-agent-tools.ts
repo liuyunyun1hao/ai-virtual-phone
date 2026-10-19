@@ -1,9 +1,9 @@
+import { identityLocalStorage } from "@/lib/identity-runtime";
 import { buildProviderRequest, parseProviderResponse } from "./llm-provider-adapter";
 import { loadApiConfigs } from "./settings-storage";
 import type { ApiConfig } from "./settings-types";
 import type { ToolCall } from "./tool-executor";
 import { getQaErrorEntries } from "./qa-error-log";
-import { formatBytes } from "./format-bytes";
 import { getDebugPromptSnapshot } from "./debug-store";
 import {
     loadQaGithubConfig,
@@ -107,8 +107,11 @@ function clip(text: string): string {
     return text.length > RESULT_CHAR_LIMIT ? `${text.slice(0, RESULT_CHAR_LIMIT)}\n…（已截断）` : text;
 }
 
-// formatBytes 的单一实现已收到 lib/format-bytes.ts（原私有实现只到 KB/MB/GB，
-// 且 0 字节显示成 "0 KB"，与备份面板口径不一致）。
+function formatBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${Math.round(bytes / 1024)} KB`;
+}
 
 // ── 工具 1：检测 API 连通性 ──
 
@@ -201,7 +204,7 @@ const storageReportTool: QaTool = {
             // Safari 不支持 databases()
         }
         try {
-            lines.push(`localStorage 键数量：${localStorage.length}`);
+            lines.push(`localStorage 键数量：${identityLocalStorage.length}`);
         } catch {
             // ignore
         }

@@ -1,3 +1,4 @@
+import { applyListeningRoomReply } from "./listen-together";
 /**
  * Background follow-up service.
  * Runs independently of any React component — fires follow-ups
@@ -18,6 +19,7 @@ import {
     getLatestCharacterStateValues,
 } from "./chat-storage";
 import type { ChatMessage, StateValue } from "./chat-storage";
+import { applyAvatarAction } from "./chat-avatar-action";
 import { generateChatCompletion, flattenCompletionResult } from "./chat-engine";
 import { armFollowUpBailout, armIdleReconnectBailout, cancelBailoutKey, cancelBailoutPrefix, cancelFollowUpBailout, startBailoutHeartbeat } from "./push-bailout-client";
 import { isWithinPushQuietHours } from "./push-client";
@@ -32,9 +34,8 @@ import {
 import { loadFollowUpConfig } from "./settings-storage";
 import { parseAIResponse } from "./rich-message-parser";
 import type { ParsedMessagePart } from "./rich-message-parser";
-import { getStatusRegionConfig, isCustomStatusRegionActive } from "./chat-status-region";
 import { isKnownStickerLabel } from "./sticker-data";
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import { bgSetInterval, bgSetTimeout } from "./bg-timer";
 import { dispatchChatMessageNotice } from "./chat-notification-events";
 import { settleShoppingPaymentRequest } from "./shopping-payment-request";
@@ -56,6 +57,9 @@ import {
     saveMenstrualPeriodCareTrigger,
     type MenstrualPeriodCareEvent,
 } from "./menstrual-storage";
+import { applyAssistantTapback, applyGroupAssistantTapback } from "./chat-tapback";
+import { applyAssistantPhotoMarkupAction } from "./chat-photo-markup";
+import { applyAssistantChatRenameAction } from "./chat-rename-action";
 
 // ── Constants ──────────────────────────────────────────────
 const MAX_FOLLOW_UPS = 10;
@@ -214,6 +218,20 @@ export async function requestBackgroundChatReply(sessionId: string): Promise<{ o
         const latestMessages = loadChatMessages(session.id);
         backgroundGeneratingSessions.add(session.id);
         window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
+        if (session.isGroup) {
+            const { generateGroupChatCompletion } = await import("./group-chat-engine");
+            const replies = await generateGroupChatCompletion(session, latestMessages);
+            for (const reply of replies) {
+                if (isBackgroundGenerationCancelled(session.id)) return { ok: false, skipped: "cancelled" };
+                await saveBackgroundCompletionRounds(
+                    [{ text: reply.responseText, rawResponseText: reply.responseText }],
+                    session.id, 0, undefined, latestMessages,
+                    { senderCharacterId: reply.characterId, senderName: reply.characterName },
+                );
+            }
+            window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+            return { ok: true };
+        }
         const rounds = await generateBackgroundCompletionRounds(
             session,
             latestMessages,
@@ -901,17 +919,13 @@ export async function parseAndSaveResponse(
     const sess = sessions.find(s => s.id === sessionId);
     const previousState = sess && !sess.isGroup ? getLatestCharacterStateValues(sess.contactId) : [];
 
-    const { parts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(rawText, previousState);
-
-    // 自定义状态栏渲染戳：追发/屏幕速聊/离线回传落库的消息此前从不盖
-    // statusRegionMode，custom 模式下 [状态栏] 原文被当 markdown 渲染成一坨
-    // "掉格式"（只有正常聊天路径盖了戳）。与 chat-room 一致：按当前会话配置盖。
-    const statusRegionMode = statusPanel && isCustomStatusRegionActive(getStatusRegionConfig(sessionId))
-        ? ("custom" as const)
-        : undefined;
+    const { parts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(applyListeningRoomReply(rawText, sessionId), previousState);
 
     // Detect call triggers and AI media actions, filter them out (not stored as messages)
     let triggerCall: "voice" | "video" | undefined;
+    let hasTapbackAction = false;
+    let hasPhotoMarkupAction = false;
+    let hasChatRenameAction = false;
     const charName = resolveFollowUpSenderName(sessionId);
 
     // 快捷动作配对消息：tool_call 存标记原文（组装器不跳过，历史上下文与模型当初
@@ -934,8 +948,45 @@ export async function parseAndSaveResponse(
 
     const filteredParts: ParsedMessagePart[] = [];
     for (const p of parts) {
+        if (p.mediaType === "photo_markup_action") {
+            const applied = applyAssistantPhotoMarkupAction({
+                sessionId,
+                actorId: sess?.isGroup ? options?.senderCharacterId : sess?.contactId,
+                actorName: options?.senderName || charName,
+                markData: p.mediaData,
+                responseBatchId,
+            });
+            if (applied) hasPhotoMarkupAction = true;
+            continue;
+        }
+        if (p.mediaType === "private_alias_action" || p.mediaType === "group_name_action") {
+            const applied = applyAssistantChatRenameAction({
+                sessionId,
+                actorId: sess?.isGroup ? options?.senderCharacterId : sess?.contactId,
+                actorName: options?.senderName || charName,
+                actionData: p.mediaData,
+                responseBatchId,
+                liveSession: sess,
+            });
+            if (applied) hasChatRenameAction = true;
+            continue;
+        }
         if (p.mediaType === "voice_call") { triggerCall = "voice"; continue; }
         if (p.mediaType === "video_call") { triggerCall = "video"; continue; }
+        if (p.mediaType === "avatar_action") {
+            const actorId = sess?.isGroup ? options?.senderCharacterId : sess?.contactId;
+            if (actorId) applyAvatarAction(sessionId, actorId, p.mediaData?.avatarImageId);
+            continue;
+        }
+        if (p.mediaType === "tapback_action") {
+            if (hasTapbackAction) continue;
+            if (sess && (sess.isGroup
+                ? options?.senderCharacterId && sess.participantIds?.includes(options.senderCharacterId) && applyGroupAssistantTapback(sessionId, p.mediaData?.tapback, { actorId: options.senderCharacterId, actorName: options.senderName || "群成员" })
+                : applyAssistantTapback(sessionId, p.mediaData?.tapback))) {
+                hasTapbackAction = true;
+            }
+            continue;
+        }
         // 「丢弃角色输出的无效表情包」开关（主动消息路径）
         if (p.mediaType === "sticker" && sess?.discardInvalidStickers === true) {
             const senderIds = sess.isGroup ? (sess.participantIds ?? []) : [sess.contactId];
@@ -983,7 +1034,6 @@ export async function parseAndSaveResponse(
                 responseBatchId,
                 rawResponseText,
                 statusPanel,
-                statusRegionMode,
                 innerMonologue,
                 reasoningText,
                 stateValues: stateValues.length > 0 ? stateValues : undefined,
@@ -1015,7 +1065,11 @@ export async function parseAndSaveResponse(
         if (triggerCall && typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("ai-call-trigger", { detail: { sessionId, type: triggerCall } }));
         }
-        return { hasVisible: false, newCount: MAX_FOLLOW_UPS, stateValues };
+        return {
+            hasVisible: hasTapbackAction || hasPhotoMarkupAction || hasChatRenameAction,
+            newCount: (hasTapbackAction || hasPhotoMarkupAction || hasChatRenameAction) ? currentCount + 1 : MAX_FOLLOW_UPS,
+            stateValues,
+        };
     }
 
     const savedMessages: ChatMessage[] = [];
@@ -1068,7 +1122,6 @@ export async function parseAndSaveResponse(
             responseBatchId,
             rawResponseText,
             statusPanel: i === metaIdx && statusPanel ? statusPanel : undefined,
-            statusRegionMode: i === metaIdx && statusPanel ? statusRegionMode : undefined,
             innerMonologue: i === metaIdx && innerMonologue ? innerMonologue : undefined,
             reasoningText: i === metaIdx ? reasoningText : undefined,
             stateValues: i === metaIdx && stateValues.length > 0 ? stateValues : undefined,

@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const ts = require('typescript');
+const path = require('node:path');
+const source = fs.readFileSync(path.join(__dirname, '../lib/chat-storage.ts'), 'utf8');
+const start = source.indexOf('export function isUnreadChatMessage(');
+const end = source.indexOf('export function createOrGetSession(', start);
+const sessions = [{ id: 'a', unreadCount: 2, unreadMessageIds: ['one', 'two'] }, { id: 'b', unreadCount: 1, unreadMessageIds: ['other'] }];
+let writes = 0;
+const context = { exports: {}, _sessionsCache: sessions, dbPutSessions: () => writes++ };
+vm.runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
+const { isUnreadChatMessage: unread, markChatSessionRead: read } = context.exports;
+assert.equal(unread({role:'assistant',content:'你好'}), true);
+assert.equal(unread({role:'assistant',content:'',mediaType:'sticker'}), true);
+for (const m of [{role:'user',content:'hi'}, {role:'system',content:'error'}, {role:'assistant',content:'',innerMonologue:'silent'}, {role:'assistant',content:'hi',isRetracted:true}, ...['tool_call','tapback_action','tool_notice','poke'].map(mediaType=>({role:'assistant',content:'action',mediaType}))]) assert.equal(unread(m), false);
+read('a'); assert.equal(sessions[0].unreadCount, 0); assert.equal(sessions[0].unreadMessageIds.length, 0); assert.equal(sessions[1].unreadCount, 1); read('a'); assert.equal(writes, 1);
+console.log('PASS: unread eligibility, session isolation and idempotent mark-read.');

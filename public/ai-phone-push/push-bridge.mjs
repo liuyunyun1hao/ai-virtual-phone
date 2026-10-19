@@ -5,9 +5,6 @@
 //      匹配规则 → 冷却/上限 → 模板/AI 加工 → 占位符替换进 prompt 快照 →
 //      生成真回复 → 写 push_outbox → 逐条推送。逻辑与 netlify 版一致。
 // 注意：自包含移植文件，改动共享逻辑时需同步。
-//      弹窗预览分条逻辑在本文件内联（见下方 splitResponseForPushPreview），
-//      内联点共 3 处：push-generate、push-bridge、screen-chat；
-//      lib/push-preview-split.ts 是 Next 侧孪生实现，当前零引用。
 
 type ProviderKind = "openai-compatible" | "anthropic" | "gemini";
 
@@ -182,7 +179,6 @@ function extractResponseText(providerKind: ProviderKind, data: unknown): string 
   return stripHallucinatedTimestamps(text);
 }
 
-// ── 内嵌：lib/push-preview-split 的弹窗预览分条 ──
 const RICH_MEDIA_NAMES = new Set(["红包", "转账", "照片", "位置", "表情包", "引用", "语音", "音乐"]);
 
 function stripStateValues(text: string): string {
@@ -293,6 +289,8 @@ type SubscriptionRow = { endpoint: string; p256dh: string; auth: string };
 type BridgeItem = { id: string; type: string; payload: string; createdAt: string };
 
 type ServerBridgeRule = {
+  userIdentityId?: string | null;
+  identityRevision?: number;
   id: string;
   name: string;
   matchType: string;
@@ -322,6 +320,7 @@ type BridgeConfigRow = {
   rules: ServerBridgeRule[];
   cloud_config: EncryptedPayload | null;
   rule_runs: Record<string, string>;
+  daily_cap: number;
   daily_count: { day?: string; count?: number };
   shortcut_actions?: unknown;
 };
@@ -429,7 +428,7 @@ Deno.serve(async (req: Request) => {
   const runJob = async (): Promise<void> => {
   try {
     const configResponse = await rest(
-      `push_bridge_config?user_id=eq.${encodeURIComponent(job.user_id)}&select=rules,cloud_config,rule_runs,daily_count,shortcut_actions&limit=1`,
+      `push_bridge_config?user_id=eq.${encodeURIComponent(job.user_id)}&select=rules,cloud_config,rule_runs,daily_cap,daily_count,shortcut_actions&limit=1`,
     );
     const configRows = configResponse.ok ? await configResponse.json() as BridgeConfigRow[] : [];
     const config = configRows[0];
@@ -696,9 +695,8 @@ Deno.serve(async (req: Request) => {
     const rules = Array.isArray(config.rules) ? config.rules : [];
     const ruleRuns: Record<string, string> = { ...(config.rule_runs || {}) };
     const today = new Date().toISOString().slice(0, 10);
-    // 每日回话不设上限（曾默认 20 次/天、无 UI 可调、超限静默不回话，已按需求取消）。
-    // daily_count 照常记账，仅作统计与排查。
     let dailyCount = config.daily_count?.day === today ? Number(config.daily_count.count) || 0 : 0;
+    const dailyCap = Math.max(1, Number(config.daily_cap) || 20);
 
     const outboxRows: Record<string, unknown>[] = [];
     let generated = 0;
@@ -779,18 +777,23 @@ Deno.serve(async (req: Request) => {
         }
 
         let replyRaw = "";
+        let capped = false;
         if (rule.chat?.requestReply) {
-          const snapshot = await loadSnapshot(rule.id);
-          if (snapshot?.replyRequest && subs.length > 0) {
-            try {
-              const bodyJson = substituteSentinel(JSON.stringify(snapshot.replyRequest.body), BRIDGE_EVENT_SENTINEL, processed);
-              replyRaw = await callLlm(snapshot.replyRequest, bodyJson, 300_000);
-              if (replyRaw) {
-                dailyCount += 1;
-                generated += 1;
+          if (dailyCount >= dailyCap) {
+            capped = true;
+          } else {
+            const snapshot = await loadSnapshot(rule.id);
+            if (snapshot?.replyRequest && subs.length > 0) {
+              try {
+                const bodyJson = substituteSentinel(JSON.stringify(snapshot.replyRequest.body), BRIDGE_EVENT_SENTINEL, processed);
+                replyRaw = await callLlm(snapshot.replyRequest, bodyJson, 300_000);
+                if (replyRaw) {
+                  dailyCount += 1;
+                  generated += 1;
+                }
+              } catch {
+                replyRaw = "";
               }
-            } catch {
-              replyRaw = "";
             }
           }
         }
@@ -979,6 +982,8 @@ Deno.serve(async (req: Request) => {
 
         const outboxId = `out_${crypto.randomUUID()}`;
         const outboxMeta: Record<string, unknown> = {
+          userIdentityId: rule.userIdentityId,
+          identityRevision: rule.identityRevision,
           kind: "bridge",
           item,
           ...(bridgeChatMessageId ? { chatMessageId: bridgeChatMessageId } : {}),
@@ -991,6 +996,7 @@ Deno.serve(async (req: Request) => {
           deferredActions: rule.deferredActions ?? [],
           ...(shortcutNote ? { shortcutNote } : {}),
           ...(executedShortcutMarker ? { shortcutMarker: executedShortcutMarker } : {}),
+          capped,
           reply: replyRaw ? (await loadSnapshot(rule.id))?.reply ?? null : null,
         };
         const stored = await rest("push_outbox", {

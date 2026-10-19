@@ -20,7 +20,7 @@ import {
   validateScheduleDraft,
 } from "@/lib/calendar-storage";
 import { createDefaultScheduleDraft, generateWeeklyCalendarSchedule } from "@/lib/calendar-engine";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import { loadChatSessions } from "@/lib/chat-storage";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import {

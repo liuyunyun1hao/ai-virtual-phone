@@ -1,0 +1,11 @@
+const fs=require('fs'),assert=require('node:assert/strict');
+const source=fs.readFileSync('components/music/music-float.tsx','utf8');
+const expression=source.match(/if \((!player \|\| hidden.*?)\) return null;/)[1];
+const hides=new Function('player','hidden','showListening','return '+expression);
+const disabled={currentTrack:null,floatDismissed:true,floatEnabled:false};
+assert.equal(hides(disabled,false,true),false,'joined listening shows despite old float dismissal and no track');
+assert.equal(hides(disabled,false,false),true,'closed/no room honors music preferences');
+assert.equal(hides(disabled,true,true),true,'full player still hides floating widget');
+assert.equal(hides(null,false,true),true,'no provider remains safe');
+assert.equal(hides({currentTrack:{},floatDismissed:false,floatEnabled:true},false,false),false,'ordinary playback unchanged');
+console.log('PASS: joined visibility, no-track placeholder gate, dismissal, player page hiding, normal playback.');

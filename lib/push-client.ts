@@ -298,7 +298,7 @@ export async function enableOfflinePush(): Promise<{ ok: boolean; error?: string
     return { ok: true };
 }
 
-export async function disableOfflinePush(): Promise<{ ok: boolean; error?: string }> {
+export async function disableOfflinePush(identityMaintenance = false): Promise<{ ok: boolean; error?: string }> {
     const registration = await getReadyRegistration(2000);
     const subscription = registration ? await registration.pushManager.getSubscription().catch(() => null) : null;
     if (subscription) {
@@ -316,10 +316,11 @@ export async function disableOfflinePush(): Promise<{ ok: boolean; error?: strin
         : null;
     if (personalSubscription) {
         if (isPersonalPushCloudActive()) {
-            await personalPushFetch("subscribe", {
+            const result = await personalPushFetch("subscribe", {
                 method: "DELETE",
                 body: JSON.stringify({ endpoint: personalSubscription.endpoint }),
-            }).catch(() => undefined);
+            }, undefined, identityMaintenance).catch(() => null);
+            if (identityMaintenance && !result?.ok) throw new Error("无法撤销旧身份的云端推送订阅");
         }
         await personalSubscription.unsubscribe().catch(() => undefined);
     }

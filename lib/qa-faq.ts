@@ -68,7 +68,7 @@ API 配置里的开关。开启后支持 function calling 的模型走原生工�
 ## 部署与分支
 
 ### Q: 怎么部署自己的实例？
-可部署到 Netlify / Vercel：导入仓库 → 选 main 或 test 分支 → 构建设置默认 → 平台后台添加环境变量 NEXT_PUBLIC_SELF_HOSTED_MODE=true → 部署。本地运行：Node.js 20+，npm install && npm run dev（默认端口 3001）。
+可部署到 Netlify / Vercel：导入仓库 → 选 main 分支 → 构建设置默认 → 平台后台添加环境变量 NEXT_PUBLIC_SELF_HOSTED_MODE=true → 部署。本地运行：Node.js 22+，npm install && npm run dev（默认端口 3001）。
 
 ### Q: main 和 test 分支有什么区别？
 main 是正常设备版；test 是兼容设备版。部分设备全屏或显示异常时改部署 test 分支，功能保持同步。

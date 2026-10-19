@@ -28,7 +28,7 @@ import { CheckPhoneDebugErrorCard } from "@/components/checkphone/checkphone-deb
 import { BlackMarketApp } from "@/components/shopping/black-market-app";
 import { ConfirmDialog } from "@/components/ui";
 import { splitBilingualText } from "@/lib/bilingual-text";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadInteractableCharacters as loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 import { createOrGetSession, pushChatMessage } from "@/lib/chat-storage";
 import {
@@ -56,6 +56,8 @@ import {
   WALLET_UPDATED_EVENT,
 } from "@/lib/wallet-storage";
 import type { WalletState } from "@/lib/wallet-types";
+import { amountCurrency } from "@/lib/currency-context";
+import { fetchExchangeRate, currencySymbol, cnyAmount } from "@/lib/exchange-rates";
 
 type ShoppingAppProps = {
   onClose: (isBusy?: boolean) => void;
@@ -101,10 +103,10 @@ const DEFAULT_DELIVERY_MIN_MINUTES = 60;
 const DEFAULT_DELIVERY_MAX_MINUTES = 180;
 
 const SHOPPING_TABS: Array<{ id: ShoppingTabId; label: string; icon: LucideIcon }> = [
-  { id: "home", label: "Home", icon: Home },
-  { id: "orders", label: "Orders", icon: Truck },
-  { id: "cart", label: "Cart", icon: ShoppingCart },
-  { id: "account", label: "Favorites", icon: Heart },
+  { id: "home", label: "首页", icon: Home },
+  { id: "orders", label: "订单", icon: Truck },
+  { id: "cart", label: "购物车", icon: ShoppingCart },
+  { id: "account", label: "收藏", icon: Heart },
 ];
 
 const SHOPPING_SECTION_SEARCH_PLACEHOLDERS: Record<ShoppingSectionSearchTabId, string> = {
@@ -132,7 +134,8 @@ function parseShoppingQuantity(label?: string): number {
 
 function formatShoppingAmount(amount: number): string {
   const safeAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
-  return `¥${Number.isInteger(safeAmount) ? safeAmount : safeAmount.toFixed(2).replace(/\.00$/, "")}`;
+  const currency = loadWalletState().currency || "CNY";
+  return `${currency === "CNY" ? "" : `${currency} `}${currencySymbol(currency)}${Number.isInteger(safeAmount) ? safeAmount : safeAmount.toFixed(2).replace(/\.00$/, "")}`;
 }
 
 function formatShoppingDateTime(date: Date): string {
@@ -513,13 +516,30 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
     [selectedOrderId, state.orders],
   );
 
+  const walletCurrency = walletState.currency || "CNY";
+  const cartCurrencyKey = [...new Set(state.cartItems.map(item => amountCurrency(item.priceLabel)))].sort().join(",");
+  const [cartRates, setCartRates] = useState<{ key: string; rates: Record<string, number>; error: string }>({ key: "", rates: {}, error: "" });
+  const rateKey = `${walletCurrency}:${cartCurrencyKey}`;
+  useEffect(() => {
+    let active = true;
+    const sources = cartCurrencyKey ? cartCurrencyKey.split(",") : [];
+    void Promise.all(sources.map(async source => [source, await fetchExchangeRate(source, walletCurrency)] as const)).then(entries => {
+      if (!active) return;
+      const valid = entries.every(([, rate]) => rate !== null);
+      setCartRates({ key: rateKey, rates: valid ? Object.fromEntries(entries) as Record<string, number> : {}, error: valid ? "" : "汇率查询失败，请重新打开购物页后再支付。" });
+    });
+    return () => { active = false; };
+  }, [cartCurrencyKey, walletCurrency, rateKey]);
+  const cartRatesReady = cartRates.key === rateKey && !cartRates.error;
+  const formatCartAmount = (amount: number) => cartRatesReady ? formatShoppingAmount(amount) : cartRates.error ? '汇率不可用' : '汇率查询中…';
+  const cartExchangeNote = cartRatesReady ? Object.entries(cartRates.rates).filter(([code]) => code !== walletCurrency).map(([code, rate]) => `1 ${code} = ${rate} ${walletCurrency}`).join("；") : cartRates.error || "汇率查询中…";
   const cartTotals = useMemo(() => {
     const orderAmount = state.cartItems.reduce(
-      (sum, item) => sum + parseShoppingAmount(item.priceLabel) * parseShoppingQuantity(item.quantityLabel),
+      (sum, item) => sum + cnyAmount(parseShoppingAmount(item.priceLabel) * parseShoppingQuantity(item.quantityLabel), cartRates.rates[amountCurrency(item.priceLabel)] || (amountCurrency(item.priceLabel) === walletCurrency ? 1 : 0)),
       0,
     );
     return { orderAmount, totalPayment: orderAmount };
-  }, [state.cartItems]);
+  }, [state.cartItems, cartRates, walletCurrency]);
   const selectedPaymentSource = useMemo(
     () => selectedPaymentSourceId === WALLET_BALANCE_ACCOUNT_ID
       ? {
@@ -541,7 +561,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
         })(),
     [selectedPaymentSourceId, walletState],
   );
-  const selectedPaymentSourceCanPay = Boolean(selectedPaymentSource && selectedPaymentSource.balance >= cartTotals.totalPayment);
+  const selectedPaymentSourceCanPay = Boolean(cartRatesReady && selectedPaymentSource && selectedPaymentSource.balance >= cartTotals.totalPayment);
 
   const savedIds = useMemo(() => new Set(state.savedItems.map(item => item.id)), [state.savedItems]);
   const cartIds = useMemo(() => new Set(state.cartItems.map(item => item.id)), [state.cartItems]);
@@ -861,6 +881,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
 
   function sendPaymentRequest() {
     if (state.cartItems.length === 0) return;
+    if (!cartRatesReady || (loadWalletState().currency || "CNY") !== walletCurrency) { setPaymentRequestError(cartRates.error || "正在查询汇率，请稍后再发送代付请求。"); return; }
     const target = paymentRequestTargets.find(item => item.id === selectedPaymentRequestTargetId);
     if (!target) {
       setPaymentRequestError("请选择代付对象。");
@@ -870,7 +891,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
     const paymentRequestId = createShoppingPaymentRequestId();
     const order = buildOrderFromCart(
       state.cartItems,
-      formatShoppingAmount(cartTotals.totalPayment),
+      formatCartAmount(cartTotals.totalPayment),
       state.settings,
       {
         statusLabel: "待代付",
@@ -894,6 +915,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
       mediaType: "payment_request",
       mediaData: {
         amount: cartTotals.totalPayment,
+        currency: walletCurrency,
         paymentRequestAmountLabel: amountLabel,
         paymentRequestId,
         shoppingOrderId: order.id,
@@ -923,7 +945,8 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
 
   function handleCheckout() {
     if (state.cartItems.length === 0) return;
-    const order = buildOrderFromCart(state.cartItems, formatShoppingAmount(cartTotals.totalPayment), state.settings);
+    if (!cartRatesReady || (loadWalletState().currency || "CNY") !== walletCurrency) { setPaymentError(cartRates.error || "正在查询汇率，请稍后再支付。"); return; }
+    const order = buildOrderFromCart(state.cartItems, formatCartAmount(cartTotals.totalPayment), state.settings);
     const paymentSource = selectedPaymentSource;
     if (!paymentSource) {
       setPaymentError("请选择付款方式。");
@@ -1124,8 +1147,8 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
                 <ChevronLeft size={22} strokeWidth={2.5} />
               </button>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#888" }}>Welcome Back</span>
-                <strong style={{ fontSize: "calc(18px*var(--app-text-scale,1))", color: "#222", lineHeight: 1.15 }}>Shopping</strong>
+                <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#888" }}>欢迎回来</span>
+                <strong style={{ fontSize: "calc(18px*var(--app-text-scale,1))", color: "#222", lineHeight: 1.15 }}>购物</strong>
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -1181,8 +1204,8 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
         <div className="cp-shopping-black-market-gate" role="status" aria-live="polite">
           <div className="cp-shopping-black-market-gate-noise" />
           <div className="cp-shopping-black-market-gate-panel">
-            <span>SEARCH QUERY ACCEPTED</span>
-            <strong data-text="BLACK MARKET">BLACK MARKET</strong>
+            <span>已进入特殊搜索</span>
+            <strong data-text="黑市">黑市</strong>
             <em>&gt; routing through night channel...</em>
           </div>
         </div>
@@ -1318,7 +1341,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
 
               {selectedTab === "cart" && (
                 <section style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <h2 style={{ fontSize: "calc(19px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "0 0 8px 4px" }}>Cart</h2>
+                  <h2 style={{ fontSize: "calc(19px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "0 0 8px 4px" }}>购物车</h2>
                   {state.cartItems.length === 0 ? (
                     <div className="cp-shopping-status cp-empty-copy" style={{ minHeight: "220px" }}>
                       <p>购物车是空的</p>
@@ -1389,15 +1412,15 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
                   {state.cartItems.length > 0 && !normalizedCartSearchQuery ? (
                     <div style={{ marginTop: "16px", background: "#fff", borderRadius: "16px", padding: "20px", boxShadow: "0 4px 20px rgba(0,0,0,0.03)" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "calc(12px*var(--app-text-scale,1))", color: "#666", marginBottom: "12px" }}>
-                        <span>Order Amount</span>
-                        <span style={{ color: "#222", fontWeight: 500 }}>{formatShoppingAmount(cartTotals.orderAmount)}</span>
+                        <span>商品金额</span>
+                        <span style={{ color: "#222", fontWeight: 500 }}>{formatCartAmount(cartTotals.orderAmount)}</span>
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "calc(14px*var(--app-text-scale,1))", color: "#222", fontWeight: "bold", borderTop: "1px dashed #eee", paddingTop: "16px", marginBottom: "24px" }}>
-                        <span>Total Payment</span>
-                        <span>{formatShoppingAmount(cartTotals.totalPayment)}</span>
+                        <span>应付总额</span>
+                        <span>{formatCartAmount(cartTotals.totalPayment)}</span>
                       </div>
                       <div style={{ display: "grid", gap: "10px" }}>
-                        <button type="button" onClick={openCheckoutSheet} style={{ width: "100%", background: "#ff6b00", color: "#fff", borderRadius: "24px", padding: "14px 0", fontSize: "calc(14px*var(--app-text-scale,1))", fontWeight: "bold", border: "none" }}>Checkout</button>
+                        <button type="button" onClick={openCheckoutSheet} style={{ width: "100%", background: "#ff6b00", color: "#fff", borderRadius: "24px", padding: "14px 0", fontSize: "calc(14px*var(--app-text-scale,1))", fontWeight: "bold", border: "none" }}>结算</button>
                         <button
                           type="button"
                           onClick={openPaymentRequestSheet}
@@ -1414,7 +1437,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
 
               {selectedTab === "orders" && (
                 <section style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <h2 style={{ fontSize: "calc(19px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "0 0 8px 4px" }}>Orders</h2>
+                  <h2 style={{ fontSize: "calc(19px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "0 0 8px 4px" }}>订单</h2>
                   {state.orders.length === 0 ? (
                     <div className="cp-shopping-status cp-empty-copy" style={{ minHeight: "220px" }}>
                       <p>暂无订单</p>
@@ -1466,7 +1489,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
 
               {selectedTab === "account" && (
                 <section style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <h2 style={{ fontSize: "calc(19px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "0 0 8px 4px" }}>Favorites</h2>
+                  <h2 style={{ fontSize: "calc(19px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "0 0 8px 4px" }}>收藏</h2>
                   {state.savedItems.length === 0 ? (
                     <div className="cp-shopping-status cp-empty-copy" style={{ minHeight: "220px" }}>
                       <p>暂无收藏</p>
@@ -1543,7 +1566,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
               <button type="button" aria-label="返回" onClick={backAction} style={{ background: "#fff", width: "34px", height: "34px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#333", border: "1px solid #eee", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
                 <ChevronLeft size={20} />
               </button>
-              <strong style={{ position: "absolute", left: "50%", bottom: "20px", transform: "translateX(-50%)", fontSize: "calc(16px*var(--app-text-scale,1))", color: "#222", fontWeight: 600 }}>Product Details</strong>
+              <strong style={{ position: "absolute", left: "50%", bottom: "20px", transform: "translateX(-50%)", fontSize: "calc(16px*var(--app-text-scale,1))", color: "#222", fontWeight: 600 }}>商品详情</strong>
               <button type="button" aria-label={savedIds.has(selectedProduct.id) ? "取消收藏" : "收藏"} onClick={() => toggleSave(selectedProduct)} style={{ background: savedIds.has(selectedProduct.id) ? "#ff6b00" : "#fff", width: "34px", height: "34px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: savedIds.has(selectedProduct.id) ? "#fff" : "#333", border: "1px solid #eee", boxShadow: "0 2px 10px rgba(0,0,0,0.05)" }}>
                 <Heart size={17} fill={savedIds.has(selectedProduct.id) ? "white" : "none"} />
               </button>
@@ -1573,7 +1596,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
 
               <div style={{ marginTop: "auto", display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "14px" }}>
                 <div style={{ display: "flex", flexDirection: "column" }}>
-                  <span style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: "#999" }}>Price</span>
+                  <span style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: "#999" }}>价格</span>
                   <strong style={{ fontSize: "calc(18px*var(--app-text-scale,1))", color: "#222" }}>{selectedProduct.priceLabel}</strong>
                 </div>
                 <button
@@ -1610,26 +1633,26 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
               <button type="button" aria-label="返回" onClick={backAction} style={{ width: "40px", height: "40px", borderRadius: "50%", border: "1px solid #eaeaea", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", color: "#333" }}>
                 <ChevronLeft size={20} strokeWidth={2.5} />
               </button>
-              <strong style={{ fontSize: "calc(16px*var(--app-text-scale,1))", color: "#222" }}>Order Details</strong>
+              <strong style={{ fontSize: "calc(16px*var(--app-text-scale,1))", color: "#222" }}>订单详情</strong>
               <div style={{ width: "40px" }} />
             </header>
 
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
               <div style={{ background: "#fff", borderRadius: "20px", padding: "20px", boxShadow: "0 4px 20px rgba(0,0,0,0.02)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "16px" }}>
-                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>Order Status</span>
+                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>订单状态</span>
                   <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: activeOrderShipping?.statusLabel === "已到货" ? "#16a34a" : "#ff6b00", fontWeight: 600 }}>{activeOrderShipping?.statusLabel ?? activeOrder.statusLabel}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>Merchant</span>
+                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>店铺</span>
                   <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#222", fontWeight: 500 }}>{activeOrder.merchantLabel}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>Order Date</span>
+                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>下单时间</span>
                   <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#222", fontWeight: 500 }}>{activeOrder.timeLabel}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: "8px" }}>
-                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>Payment</span>
+                  <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#999" }}>支付方式</span>
                   <span style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#222", fontWeight: 500, textAlign: "right" }}>
                     {activeOrder.paymentStatus === "payment_requested"
                       ? `等待${activeOrder.payerCharacterName || "TA"}代付`
@@ -1667,7 +1690,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
                 </div>
               ) : null}
 
-              <h3 style={{ fontSize: "calc(14px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "8px 0 0 0" }}>Items</h3>
+              <h3 style={{ fontSize: "calc(14px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", margin: "8px 0 0 0" }}>商品明细</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 {activeOrder.items.map(item => (
                   <button
@@ -1691,17 +1714,17 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
               </div>
 
               <div style={{ background: "#fff", borderRadius: "20px", padding: "20px", boxShadow: "0 4px 20px rgba(0,0,0,0.02)" }}>
-                <h4 style={{ fontSize: "calc(13px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", marginBottom: "8px" }}>Order Note</h4>
+                <h4 style={{ fontSize: "calc(13px*var(--app-text-scale,1))", fontWeight: "bold", color: "#222", marginBottom: "8px" }}>订单备注</h4>
                 <p style={{ fontSize: "calc(12px*var(--app-text-scale,1))", color: "#666", margin: 0 }}><CheckPhoneBilingualText text={activeOrder.note} tone="shopping" /></p>
               </div>
 
               <div style={{ background: "#fff", borderRadius: "20px", padding: "20px", boxShadow: "0 4px 20px rgba(0,0,0,0.02)", marginTop: "auto" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "calc(12px*var(--app-text-scale,1))", color: "#666", marginBottom: "12px" }}>
-                  <span>Total Items</span>
+                  <span>商品数量</span>
                   <span style={{ color: "#222", fontWeight: 500 }}>{activeOrder.items.length}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "calc(16px*var(--app-text-scale,1))", color: "#222", fontWeight: "bold", borderTop: "1px dashed #eee", paddingTop: "16px" }}>
-                  <span>Amount Paid</span>
+                  <span>实付金额</span>
                   <span style={{ color: "#ff6b00" }}>{activeOrder.totalLabel}</span>
                 </div>
               </div>
@@ -1715,7 +1738,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
           <div className="cp-shopping-translation-sheet" role="dialog" aria-modal="true" aria-label="中文翻译" onClick={event => event.stopPropagation()}>
             <div className="cp-shopping-translation-head">
               <span>中文翻译</span>
-              <button type="button" onClick={() => setTranslationPreview(null)}>Close</button>
+              <button type="button" onClick={() => setTranslationPreview(null)}>关闭</button>
             </div>
             <p className="cp-shopping-translation-original">{translationPreview.original}</p>
             <div className="cp-shopping-translation-divider" />
@@ -1750,7 +1773,7 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
           <div className="cp-shopping-translation-sheet" role="dialog" aria-modal="true" aria-label="购物提示词" onClick={event => event.stopPropagation()} style={{ maxHeight: "74vh" }}>
             <div className="cp-shopping-translation-head">
               <span>购物设置</span>
-              <button type="button" onClick={() => setPromptOpen(false)}>Close</button>
+              <button type="button" onClick={() => setPromptOpen(false)}>关闭</button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "12px" }}>
               {([
@@ -1872,16 +1895,17 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
               <button type="button" onClick={() => {
                 setConfirmCheckoutOpen(false);
                 setPaymentError(null);
-              }}>Close</button>
+              }}>关闭</button>
             </div>
 
             <div style={{ background: "#fff7ed", border: "1px solid rgba(255,107,0,0.14)", borderRadius: "18px", padding: "14px 16px", marginBottom: "14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                 <span style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: "#9a5a18", fontWeight: 700 }}>应付金额</span>
-                <strong style={{ fontSize: "calc(22px*var(--app-text-scale,1))", color: "#222", lineHeight: 1 }}>{formatShoppingAmount(cartTotals.totalPayment)}</strong>
+                <strong style={{ fontSize: "calc(22px*var(--app-text-scale,1))", color: "#222", lineHeight: 1 }}>{formatCartAmount(cartTotals.totalPayment)}</strong>
               </div>
               <CreditCard size={24} color="#ff6b00" />
             </div>
+            {cartExchangeNote && <div style={{ fontSize: "12px", color: "#888", marginBottom: "12px" }}>{cartExchangeNote}</div>}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "42vh", overflowY: "auto", paddingRight: "2px" }}>
               {[
@@ -1976,13 +2000,13 @@ export function ShoppingApp({ onClose, visible = true, onIdle, onBusyChange }: S
               <button type="button" onClick={() => {
                 setPaymentRequestOpen(false);
                 setPaymentRequestError(null);
-              }}>Close</button>
+              }}>关闭</button>
             </div>
 
             <div style={{ background: "#fff7ed", border: "1px solid rgba(255,107,0,0.14)", borderRadius: "18px", padding: "14px 16px", marginBottom: "14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexShrink: 0 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
                 <span style={{ fontSize: "calc(11px*var(--app-text-scale,1))", color: "#9a5a18", fontWeight: 700 }}>代付金额</span>
-                <strong style={{ fontSize: "calc(22px*var(--app-text-scale,1))", color: "#222", lineHeight: 1 }}>{formatShoppingAmount(cartTotals.totalPayment)}</strong>
+                <strong style={{ fontSize: "calc(22px*var(--app-text-scale,1))", color: "#222", lineHeight: 1 }}>{formatCartAmount(cartTotals.totalPayment)}</strong>
               </div>
               <HeartHandshake size={24} color="#ff6b00" />
             </div>

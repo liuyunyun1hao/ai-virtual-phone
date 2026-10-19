@@ -451,10 +451,19 @@ export function SplashAnimation() {
       titles = [];
       titleFontSize = Math.max(54, Math.min(96, W * 0.22));
       ctx.font = `italic 400 ${titleFontSize}px ${FONT_SERIF}`;
-      const word = "float";
-      const widths = [...word].map((c) => ctx.measureText(c).width);
-      const spacing = titleFontSize * 0.04;
+      const word = "float-Yyk";
+      let widths = [...word].map((c) => ctx.measureText(c).width);
+      let spacing = titleFontSize * 0.04;
       let total = widths.reduce((sum, width) => sum + width, 0) + spacing * (word.length - 1);
+      // Keep the complete name inside the phone, with room for the letter motion.
+      const maxTitleWidth = W * 0.82;
+      if (total > maxTitleWidth) {
+        titleFontSize *= maxTitleWidth / total;
+        ctx.font = `italic 400 ${titleFontSize}px ${FONT_SERIF}`;
+        widths = [...word].map((c) => ctx.measureText(c).width);
+        spacing = titleFontSize * 0.04;
+        total = widths.reduce((sum, width) => sum + width, 0) + spacing * (word.length - 1);
+      }
       let xc = W / 2 - total / 2;
       const titleY = H * 0.5;
       for (let i = 0; i < word.length; i++) {
@@ -562,7 +571,7 @@ export function SplashAnimation() {
     <div ref={stageRef} className="splash-animation-stage" aria-hidden>
       <canvas ref={canvasRef} className="splash-animation-canvas" />
       <div className="splash-animation-grain" />
-      <div className="splash-animation-corner">float / 0.1</div>
+      <div className="splash-animation-corner">float-Yyk / 0.1</div>
       <div className="splash-animation-corner splash-animation-corner-right">no.001</div>
     </div>
   );

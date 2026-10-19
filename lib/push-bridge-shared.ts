@@ -11,6 +11,8 @@ export const SCREEN_CHAT_SENTINEL = "SCREEN_CHAT_TURNS_TEXT";
 
 /** 服务端可执行的精简规则形态（客户端从 BridgeRule 裁剪同步上来） */
 export type ServerBridgeRule = {
+    userIdentityId?: string | null;
+    identityRevision?: number;
     id: string;
     name: string;
     matchType: string;

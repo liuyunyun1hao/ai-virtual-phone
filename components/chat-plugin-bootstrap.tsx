@@ -9,7 +9,11 @@ import { getChatPluginRuntime } from "@/lib/chat-plugin-runtime";
 
 export function ChatPluginBootstrap() {
     useEffect(() => {
-        void getChatPluginRuntime().ensureStarted();
+        const runtime = getChatPluginRuntime();
+        const silence = () => runtime.silence();
+        window.addEventListener("float-identity-silenced", silence);
+        void runtime.ensureStarted();
+        return () => window.removeEventListener("float-identity-silenced", silence);
     }, []);
     return null;
 }

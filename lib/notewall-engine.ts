@@ -1,4 +1,4 @@
-import { loadCharacters } from "./character-storage";
+import { loadInteractableCharacters as loadCharacters } from "./character-storage";
 import type { Character } from "./character-types";
 import { previewMessagesForApi, sendLLMRequest, ChatEngineError } from "./chat-engine";
 import { assemblePromptPayload, type LLMMessage } from "./llm-prompt-assembler";
