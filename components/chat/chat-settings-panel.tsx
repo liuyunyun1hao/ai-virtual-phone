@@ -51,6 +51,7 @@ import { ConfirmDialog } from "@/components/ui/modal";
 import { CHAT_SESSION_CSS_EXAMPLE } from "@/lib/css-examples";
 import { Toggle, Input } from "@/components/ui/form";
 import { PageShell } from "@/components/ui/page-shell";
+import { useHideAudioTags, setHideAudioTags, getHideAudioTags } from "@/lib/chat-display-prefs";
 
 // 自定义状态栏预填模板：微博主页（契约=「状态栏」章节整段正文，含【逻辑】【格式】与包裹要求）
 // 预览用的默认示例数据：契约没有自带示例时兜底，字段与下面的微博模板对应
@@ -394,6 +395,7 @@ export function ChatSettingsPanel({
     const [collapseBilingualTranslation, setCollapseBilingualTranslation] = useState(session.collapseBilingualTranslation !== false);
     const [discardInvalidStickers, setDiscardInvalidStickers] = useState(session.discardInvalidStickers === true);
     // 流式生成：按会话区分（线上/线下），存 ChatSession 字段，默认关
+    const hideAudioTags = useHideAudioTags();
     const [streamOnline, setStreamOnline] = useState(session.streamOnline === true);
     const [streamOffline, setStreamOffline] = useState(session.streamOffline === true);
     const defaultBilingualPrompt = session.isGroup ? DEFAULT_GROUP_CHAT_BILINGUAL_PROMPT : DEFAULT_CHAT_BILINGUAL_PROMPT;
@@ -1090,6 +1092,19 @@ export function ChatSettingsPanel({
                                         updateSession({ discardInvalidStickers: c });
                                     }}
                                 />
+                            </div>
+                        </div>
+                        <div className="menu-item">
+                            <ChatInfoIcon icon={Sparkles} color={BINDING_ACCENTS.api} />
+                            <div className="menu-label-group">
+                                <span className="menu-label">隐藏语气标签</span>
+                                <span className="menu-desc">
+                                    把气泡里的 [whispers]、[轻笑] 这类方括号标签抹掉再显示。
+                                    只影响显示 —— 语音合成拿到的仍是带标签的原文，所以开着不影响 TTS 的表演效果。
+                                </span>
+                            </div>
+                            <div className="menu-right">
+                                <Toggle checked={hideAudioTags} onChange={c => setHideAudioTags(c)} />
                             </div>
                         </div>
                         <div className="menu-item">

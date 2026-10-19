@@ -71,20 +71,7 @@ export async function synthesizeSpeech(
     return null;
 }
 
-/**
- * 剥掉方括号语气标签。
- * 只处理"短的、像指令的"方括号片段（≤60 字），避免误伤正文里的 [1] 之类；
- * 剥完把连续的空白和多余标点收一收，别留下 "……  …" 这种空洞。
- */
-export function stripAudioTags(text: string): string {
-    return text
-        .replace(/\[[^\]\n]{1,60}\]/g, " ")
-        .replace(/[ \t]{2,}/g, " ")
-        .replace(/\.{3,}/g, "…")
-        .replace(/(…\s*){2,}/g, "…")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-}
+// 标签规则收敛到 lib/audio-tags.ts —— 显示层和合成层共用同一套
 
 // A stalled TTS request (TCP connected but no response — cold start, rate-limit
 // hold, network blip) would otherwise hang forever, since fetch has no default

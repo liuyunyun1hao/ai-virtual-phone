@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
+import { getHideAudioTags, useHideAudioTags } from "@/lib/chat-display-prefs";
+import { stripAudioTags } from "@/lib/audio-tags";
 import { findCustomStickerByName, resolveCustomStickerUrl } from "@/lib/custom-sticker-storage";
 import { isMediaStoreRef, loadMediaObjectUrl } from "@/lib/media-cache-storage";
 import { getChatImageFromIndexedDB } from "@/lib/chat-asset-storage";
@@ -89,6 +91,10 @@ function PluginKindBubble({ msg, kind }: { msg: ChatMessage; kind: string }) {
  * Falls back to ReactMarkdown for plain text messages.
  */
 export const MessageBubble = memo(function MessageBubble({ msg, onUpdate, charName, userName, onSystemMessage, groupSize, onShowDetail, characterId, onMusicPlay, onActionSelect, displayContent, defaultTranslationExpanded = false }: MessageBubbleProps) {
+    // 订阅"隐藏语气标签"开关。必须放在 memo 组件内部 ——
+    // 放父组件的话，开关一变父组件重渲染，但 props 没变会被 memo 挡掉，
+    // 气泡就不会更新。
+    useHideAudioTags();
     switch (msg.mediaType) {
         case "red_packet":
             return <RedPacketBubble msg={msg} charName={charName} userName={userName} groupSize={groupSize} onShowDetail={onShowDetail} />;
@@ -195,13 +201,18 @@ function splitChatContent(text: string): { type: "md" | "html"; content: string 
 }
 
 export function normalizeTextBubbleContent(content: string): string {
-    const cleaned = content
+    let cleaned = content
         .replace(/\[音乐(?:分享)?(?:[：:][^\]]*)?\]/g, "")
         .replace(/\[[^\]]+拍了拍[^\]]+\]/g, "")
         .replace(/\[[^\]]*?(?:获取指令|获取工具)[:：][^\]]*\]/g, "")
         .replace(/\[[^\]]*?(?:执行动作|工具调用)[:：][^\]]*?[（(][\s\S]*?[)）]\]/g, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+
+    // 语气标签（[whispers] / [轻笑]）默认从气泡里抹掉，可在聊天设置里关。
+    // 放在这些结构化标记之后：先把 [红包:5.00:1] 这类处理掉，再扫剩下的短方括号，
+    // 免得把结构化标记误判成语气标签。
+    if (getHideAudioTags()) cleaned = stripAudioTags(cleaned);
     // 只剩零宽字符/BOM 等不可见内容时按空处理，否则会渲染出一个空气泡
     //（也让历史脏数据在显示层直接被隐藏）
     return isInvisibleOrWhitespaceOnly(cleaned) ? "" : cleaned;
@@ -489,6 +500,8 @@ function MarkdownTextContent({
     onActionSelect?: (text: string) => void;
     htmlFrameVariant?: ChatHtmlFrameVariant;
 }) {
+    // 真正用到标签开关的地方，直接在这里订阅（不依赖父组件的重渲染）
+    useHideAudioTags();
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Action delegate for data-action clicks in inline HTML
