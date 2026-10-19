@@ -100,6 +100,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", ALLOW_HEADERS)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Expose-Headers", EXPOSE_HEADERS)
+        # Chrome 的私有网络访问（PNA）：https 页面请求 127.0.0.1 时会额外发一次
+        # Access-Control-Request-Private-Network，响应里必须回这个头，否则会被拦。
+        # 不回也不会立刻坏，但 Chrome 一旦全面执行就会连不上，先加上。
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Access-Control-Max-Age", "86400")
         self.send_header("Vary", "Origin")
         self.send_header("Cache-Control", "no-store")
@@ -123,10 +127,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.rstrip("/") in ("", "/health"):
-            return self._health()
-        if self.path == "/":
+        # 注意剥掉查询串：/health?t=1 以前会掉进 _relay 然后 404（实测踩到过）
+        raw = self.path.split("?", 1)[0]
+        if raw in ("", "/"):
             return self._index()
+        if raw.rstrip("/") == "/health":
+            return self._health()
         self._relay("GET")
 
     def do_POST(self):
