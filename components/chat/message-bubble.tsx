@@ -40,6 +40,8 @@ import { ApplePayBrand } from "./apple-pay-brand";
 import { currencySymbol, normalizeCurrency, fetchExchangeRate, cnyAmount } from "@/lib/exchange-rates";
 import { LocationCard } from "./location-map";
 import { getQuotePreview, normalizeQuotePreviewText } from "@/lib/chat-quote-preview";
+import { getHideAudioTags, useHideAudioTags } from "@/lib/chat-display-prefs";
+import { stripAudioTags } from "@/lib/audio-tags";
 
 interface MessageBubbleProps {
     quoteSource?: ChatMessage;
@@ -228,13 +230,20 @@ function splitChatContent(text: string): { type: "md" | "html"; content: string 
 }
 
 export function normalizeTextBubbleContent(content: string): string {
-    const cleaned = content
+    let cleaned = content
         .replace(/\[音乐(?:分享)?(?:[：:][^\]]*)?\]/g, "")
         .replace(/\[[^\]]+拍了拍[^\]]+\]/g, "")
         .replace(/\[[^\]]*?(?:获取指令|获取工具)[:：][^\]]*\]/g, "")
         .replace(/\[[^\]]*?(?:执行动作|工具调用)[:：][^\]]*?[（(][\s\S]*?[)）]\]/g, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+
+    // 语气标签（[whispers] / [轻笑]）默认从气泡里抹掉，可在聊天设置里关。
+    // 放在上面这些结构化标记之后：先把 [红包:5.00:1] 这类处理掉，再扫剩下的
+    // 短方括号，免得把结构化标记误判成语气标签。
+    // 注意跟 Y2K 自带的 voiceDisplayText 是互补的 —— 那个处理 {voice:...} 花括号，
+    // 这个处理 [方括号]。角色万一没用它教的格式，靠这一层兜。
+    if (getHideAudioTags()) cleaned = stripAudioTags(cleaned);
     // 只剩零宽字符/BOM 等不可见内容时按空处理，否则会渲染出一个空气泡
     //（也让历史脏数据在显示层直接被隐藏）
     return isInvisibleOrWhitespaceOnly(cleaned) ? "" : cleaned;
@@ -522,6 +531,8 @@ function MarkdownTextContent({
     onActionSelect?: (text: string) => void;
     htmlFrameVariant?: ChatHtmlFrameVariant;
 }) {
+    // 真正用到标签开关的组件，直接在这里订阅 —— 不依赖父组件的重渲染
+    useHideAudioTags();
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Action delegate for data-action clicks in inline HTML
@@ -2716,9 +2727,14 @@ function synthesizeVoiceForMessage(msgId: string, characterId: string, speechTex
     const task = (async () => {
         const { resolveVoiceConfig, synthesizeSpeech } = await import("@/lib/tts-service");
         const vc = resolveVoiceConfig(characterId);
-        if (!vc) throw new Error("未绑定语音配置");
-        const blob = await synthesizeSpeech(speechText, vc);
-        if (!blob) throw new Error("合成失败");
+        if (!vc) throw new Error("这个角色没有绑定语音配置 —— 去「配置绑定」里给它选一个");
+        // 报错时带上用的哪份配置。试听走界面上正在编辑的那份，聊天走角色绑定的
+        // 那份，两者常常不是同一个 —— 以前只说"合成失败"，看不出用的哪份。
+        const blob = await synthesizeSpeech(speechText, vc).catch((e: unknown) => {
+            const reason = e instanceof Error ? e.message : String(e);
+            throw new Error(`配置「${vc.name || vc.provider}」(${vc.provider})：${reason}`);
+        });
+        if (!blob) throw new Error(`配置「${vc.name || vc.provider}」没有返回音频`);
         const dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);

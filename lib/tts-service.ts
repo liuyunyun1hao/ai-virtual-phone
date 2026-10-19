@@ -40,6 +40,19 @@ export async function synthesizeSpeech(
     if (!text.trim()) return null;
 
     const provider = voiceConfig.provider;
+
+    // 可选：送合成前先让模型把台词改写成带呼吸/动作标签的配音脚本。
+    // 默认关 —— Y2K 自带的 voiceExpressionInstruction 已经让角色生成时就产出
+    // {voice:...} 标记，两套同时开会对同一段文本重复加工。
+    // 放在这个入口是为了让语音条、语音通话、视频通话、群组通话四处自动生效。
+    // 失败一律回退原文：改写是锦上添花，不该让语音整个哑掉。
+    if (voiceConfig.enableTtsRewrite) {
+        const { rewriteForTts } = await import("./tts-rewrite");
+        const rewritten = await rewriteForTts(text, { apiConfigId: voiceConfig.rewriteApiConfigId });
+        if (rewritten.text && !rewritten.error) text = rewritten.text;
+        else if (rewritten.error) console.warn("[tts] 改写失败，用原文合成:", rewritten.error);
+    }
+
     // Stored expressive speech may be replayed after the user changes provider/model.
     if (!supportsVoiceExpression(provider, voiceConfig.model)) text = text.replace(/\[[a-zA-Z][a-zA-Z ,'-]{0,100}\]/g, "").trim();
     if (provider === "ElevenLabs") return synthesizeElevenLabs(text, voiceConfig);

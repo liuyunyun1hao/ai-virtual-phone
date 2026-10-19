@@ -55,6 +55,7 @@ import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { CHAT_SESSION_CSS_EXAMPLE } from "@/lib/css-examples";
 import { Toggle, Input, Textarea } from "@/components/ui/form";
+import { useHideAudioTags, setHideAudioTags } from "@/lib/chat-display-prefs";
 import { PageShell } from "@/components/ui/page-shell";
 import {
     IMESSAGE_TAPBACKS,
@@ -308,6 +309,7 @@ export function ChatSettingsPanel({
     const [alias, setAlias] = useState<string>(session.alias || "");
     const [videoBackground, setVideoBackground] = useState<string>(session.videoBackground || "");
     const [voiceBackground, setVoiceBackground] = useState<string>(session.voiceBackground || "");
+    const hideAudioTags = useHideAudioTags();
     const [isPinned, setIsPinned] = useState(session.isPinned || false);
     // 自定义状态栏（状态区）
     const [statusRegion, setStatusRegion] = useState<StatusRegionConfig>(() => getStatusRegionConfig(session.id));
@@ -882,6 +884,20 @@ export function ChatSettingsPanel({
                         <div className="menu-right"><ChevronRight size={16} /></div>
                     </button>
 <div className="menu-item">
+                            <ChatInfoIcon icon={Code} color={BINDING_ACCENTS.preset} />
+                            <div className="menu-label-group">
+                                <span className="menu-label">隐藏语气标签</span>
+                                <span className="menu-desc">
+                                    把气泡里的 [whispers]、[轻笑] 这类方括号标签抹掉再显示。
+                                    只影响显示 —— 送语音合成的仍是带标签的原文。跟本版自带的
+                                    {"{voice:...}"} 标记是互补的两层。
+                                </span>
+                            </div>
+                            <div className="menu-right">
+                                <Toggle checked={hideAudioTags} onChange={c => setHideAudioTags(c)} />
+                            </div>
+                        </div>
+                        <div className="menu-item">
                             <ChatInfoIcon icon={Code} color={BINDING_ACCENTS.preset} />
                             <div className="menu-label-group">
                                 <span className="menu-label">原生状态栏</span>

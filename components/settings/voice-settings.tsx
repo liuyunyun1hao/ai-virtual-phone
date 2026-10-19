@@ -717,6 +717,16 @@ export function VoiceSettings() {
                                         </div>
                                         {config.provider === "ElevenLabs" && (
                                             <>
+                                                <label className="flex flex-col gap-1">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <span className="menu-desc ml-1">合成前用模型改写台词（呼吸/动作标签）</span>
+                                                        <Toggle checked={!!config.enableTtsRewrite} onChange={v => updateConfig(config.id, { enableTtsRewrite: v })} />
+                                                    </div>
+                                                    <span className="menu-desc ml-1">
+                                                        开着会先让模型把句子改出停顿和情绪再送合成，同一条消息只改一次。
+                                                        跟本版自带的 {"{voice:...}"} 标记是两种做法，建议二选一，同时开会重复加工。
+                                                    </span>
+                                                </label>
                                                 <label className="flex flex-col gap-1"><span className="menu-desc ml-1">接口地址 (Base URL)</span>
                                                     <Input value={config.baseUrl || ""} onChange={e => updateConfig(config.id, { baseUrl: e.target.value })} placeholder={ELEVENLABS_BASE_URL} />
                                                 </label>

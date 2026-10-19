@@ -156,6 +156,10 @@ export type VoiceApiConfig = {
     elevenLabs?: { stability?: number; similarity?: number; style?: number; speakerBoost?: boolean; languageCode?: string };
     /** Minimax voice_setting.pitch（半音，±12）。缺省保持旧行为（0，原声）。 */
     speechPitch?: number;
+    /** 送合成前先用模型把台词改写成配音脚本（加呼吸/动作标签）。默认关。 */
+    enableTtsRewrite?: boolean;
+    /** 改写用哪个 API 配置；不填就用第一个。 */
+    rewriteApiConfigId?: string;
     customVoices?: { id: string; name: string; createdAt?: number }[];
     enableSTT: boolean;
     enableTTS: boolean;
