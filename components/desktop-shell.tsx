@@ -150,7 +150,6 @@ import type { ChatSharePayload } from "@/lib/chat-share";
 import { completePendingMcpOAuthCallback } from "@/lib/tool-executor";
 import { phoneSessionParent } from "@/lib/phone-session-protocol";
 import { LayoutGrid, LoaderCircle, RefreshCw } from "lucide-react";
-import { FloatingControlDock } from "@/components/floating-control-dock";
 
 const EMOJI_FONTS = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla"';
 
@@ -4859,7 +4858,6 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
               <DebugPromptPanel />
               <QuickActionFloat />
               <MascotFloat />
-              <FloatingControlDock activeApp={activeApp} />
               {/* 预览弹窗宿主：独立于桌宠的展开/收起状态，否则桌宠收成小球时弹不出来 */}
               <MascotPreviewHost />
 
