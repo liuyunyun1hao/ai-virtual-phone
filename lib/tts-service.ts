@@ -43,6 +43,10 @@ export async function synthesizeSpeech(
         return synthesizeOpenAI(text, voiceConfig);
     }
 
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(text, voiceConfig);
+    }
+
     return null;
 }
 
@@ -168,6 +172,61 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
     if (!response.ok) {
         const errText = await response.text().catch(() => "");
         throw new Error(`OpenAI TTS 请求失败 (${response.status}): ${errText}`);
+    }
+
+    const blob = await response.blob();
+    return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
+}
+
+// ── ElevenLabs ────────────────────────────────────────────────────────
+// POST /v1/text-to-speech/{voice_id}?output_format=mp3_44100_128
+// 鉴权走 xi-api-key 头（不是 Bearer）。字段名照 openapi.json 核过：
+//   text(必填) / model_id / voice_settings{stability, similarity_boost, style, use_speaker_boost, speed}
+// 音频标签（[whispers] 这种方括号）只有部分模型支持，v4 / v3 / v4_turbo 支持。
+// 实测 api.elevenlabs.io 的 CORS 是 allow-origin:* + allow-headers:*，浏览器可直连，不需要服务端转发。
+const ELEVENLABS_DEFAULT_BASE_URL = "https://api.elevenlabs.io/v1";
+const ELEVENLABS_DEFAULT_MODEL = "eleven_v4";
+// 文档示例里常用的一个公开音色（Rachel），只作占位，用户应换成自己的 voice id
+const ELEVENLABS_DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM";
+const ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "mp3_44100_128";
+
+function clamp01(v: number | undefined, fallback: number): number {
+    if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+    return Math.min(1, Math.max(0, v));
+}
+
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
+
+    const baseUrl = (config.baseUrl || ELEVENLABS_DEFAULT_BASE_URL).replace(/\/$/, "");
+    const voiceId = config.defaultVoice || ELEVENLABS_DEFAULT_VOICE;
+    const url = `${baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}`
+        + `?output_format=${encodeURIComponent(config.outputFormat || ELEVENLABS_DEFAULT_OUTPUT_FORMAT)}`;
+
+    const response = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+            "xi-api-key": config.apiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+            text,
+            model_id: config.model || ELEVENLABS_DEFAULT_MODEL,
+            voice_settings: {
+                stability: clamp01(config.stability, 0.5),
+                similarity_boost: clamp01(config.similarityBoost, 0.75),
+                style: clamp01(config.styleExaggeration, 0),
+                use_speaker_boost: true,
+                // 这里复用 Minimax 那个语速字段，两边语义一致（1.0 = 原速）
+                speed: Math.min(2, Math.max(0.5, config.speechSpeed ?? 1)),
+            },
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        throw new Error(`ElevenLabs TTS 请求失败 (${response.status}): ${errText.slice(0, 300)}`);
     }
 
     const blob = await response.blob();

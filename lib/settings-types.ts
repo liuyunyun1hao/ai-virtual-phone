@@ -241,6 +241,14 @@ export type VoiceApiConfig = {
     speechSpeed?: number;
     /** Minimax voice_setting.pitch（半音，±12）。缺省保持旧行为（0，原声）。 */
     speechPitch?: number;
+    /** ElevenLabs voice_settings.stability（0~1，默认 0.5）。越低越有起伏。 */
+    stability?: number;
+    /** ElevenLabs voice_settings.similarity_boost（0~1，默认 0.75）。 */
+    similarityBoost?: number;
+    /** ElevenLabs voice_settings.style（0~1，默认 0）。调高会更"演"。 */
+    styleExaggeration?: number;
+    /** ElevenLabs 输出格式（查询参数 output_format，默认 mp3_44100_128）。 */
+    outputFormat?: string;
     customVoices?: { id: string; name: string; createdAt?: number }[];
     enableSTT: boolean;
     enableTTS: boolean;
