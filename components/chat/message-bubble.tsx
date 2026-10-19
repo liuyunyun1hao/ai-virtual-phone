@@ -2304,6 +2304,10 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
     const [playing, setPlaying] = useState(false);
     const [synthesizing, setSynthesizing] = useState(false);
     const [synthFailed, setSynthFailed] = useState(false);
+    // 失败原因要留下来。以前 catch 是空的，界面上只有「合成失败·点击重试」，
+    // 到底是 key 不对、音色不属于本账号、还是模型没开通，全看不见，
+    // 只能靠猜。现在把上游的原话显示出来。
+    const [synthError, setSynthError] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const mountedRef = useRef(true);
     useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -2352,6 +2356,7 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
         }
         setSynthesizing(true);
         setSynthFailed(false);
+        setSynthError(null);
         synthesizeVoiceForMessage(msg.id, characterId, speechText)
             .then((dataUrl) => {
                 if (onUpdate) onUpdate({ ...msg, mediaUrl: dataUrl, mediaData: { ...msg.mediaData, synthesizedFromText: speechText } });
@@ -2359,10 +2364,18 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
                 setSynthesizing(false);
                 playSrc(dataUrl);
             })
-            .catch(() => {
+            .catch((err: unknown) => {
                 if (!mountedRef.current) return;
+                const reason = err instanceof Error ? err.message : String(err);
                 setSynthesizing(false);
                 setSynthFailed(true);
+                setSynthError(reason.slice(0, 400));
+                // 同时弹一下全局提示：气泡在长列表里可能不在视野内
+                try {
+                    window.dispatchEvent(new CustomEvent("global-notice", {
+                        detail: `语音合成失败：${reason.slice(0, 80)}`,
+                    }));
+                } catch { /* ignore */ }
             });
     };
 
@@ -2377,6 +2390,7 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
     });
 
     return (
+        <>
         <div className="voice-msg-bubble" onClick={handlePlay}
             style={{ minWidth: `${Math.min(60 + duration * 8, 220)}px` }}
         >
@@ -2402,5 +2416,23 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
             </div>
             <span className="voice-msg-dur">{synthFailed ? "合成失败·点击重试" : `${duration}"`}</span>
         </div>
+        {synthError && (
+            <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    marginTop: 6,
+                    marginLeft: 2,
+                    fontSize: 11,
+                    lineHeight: 1.6,
+                    color: "#c0392b",
+                    maxWidth: 250,
+                    wordBreak: "break-word",
+                    whiteSpace: "pre-wrap",
+                }}
+            >
+                语音合成失败：{synthError}
+            </div>
+        )}
+    </>
     );
 }
