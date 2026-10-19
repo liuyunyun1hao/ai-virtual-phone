@@ -31,6 +31,14 @@
 @import "../styles/interview-magazine.css";
 @import "../styles/cocreate.css";
 @import "../styles/qa.css";
+@import "../styles/floating-controls.css";
+@import "../styles/storage-cleaner.css";
+@import "../styles/api-accounts.css";
+@import "../styles/api-groups.css";
+@import "../styles/quick-note-float.css";
+@import "../styles/worldbook-file-vault.css";
+@import "../styles/mix-file-vault.css";
+@import "../styles/chat-doc-import.css";
 
 @theme {
   /* 间距 (4px 基准) */
