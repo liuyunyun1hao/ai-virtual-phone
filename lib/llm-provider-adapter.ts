@@ -540,13 +540,33 @@ function buildOpenAICompatibleRequest(
             },
         }));
     }
+    const requestUrl = buildChatCompletionsUrl(baseUrl);
     return {
-        url: buildChatCompletionsUrl(baseUrl),
+        url: requestUrl,
         headers: buildRequestHeaders(config, baseUrl),
         body,
         providerKind: "openai-compatible",
         messagesForLog: messages.map(messageForLog),
+        serverProxy: needsServerProxy(requestUrl),
     };
+}
+
+/**
+ * 这些目标必须经本站 /api/llm-proxy 服务端转发：
+ * 浏览器直连会被 CORS 拦住，或上游要求浏览器发不出来的头。
+ *
+ * 目前只有 OpenCode Zen/Go 网关（https://opencode.ai/zen/go/v1）：
+ *   - 未开放浏览器 CORS；
+ *   - 2025-09-05 起要求 `x-opencode-session` 头，缺失回 400 MissingSessionID。
+ * 会话头由 app/api/llm-proxy/route.ts 在服务端补。
+ */
+export function needsServerProxy(url: string): boolean {
+    try {
+        const host = new URL(url).hostname.toLowerCase();
+        return host === "opencode.ai" || host.endsWith(".opencode.ai");
+    } catch {
+        return false;
+    }
 }
 
 function shouldEchoReasoningContent(config: ApiConfig): boolean {
@@ -590,12 +610,14 @@ function buildAnthropicRequest(
             input_schema: tool.parameters,
         }));
     }
+    const requestUrl = `${baseUrl.replace(/\/$/, "")}/messages`;
     return {
-        url: `${baseUrl.replace(/\/$/, "")}/messages`,
+        url: requestUrl,
         headers: buildRequestHeaders(config, baseUrl),
         body,
         providerKind: "anthropic",
         messagesForLog: messages.map(messageForLog),
+        serverProxy: needsServerProxy(requestUrl),
     };
 }
 

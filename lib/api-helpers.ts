@@ -3,6 +3,7 @@
 // request headers, and response parsing. All LLM-calling modules should use these.
 
 import type { ApiConfig } from "./settings-types";
+import { sendLlmRequest } from "./llm-http";
 import { pushApiLog } from "./api-log-store";
 import { recordLlmSpend, type LlmUsageLike } from "./api-accounts";
 
@@ -170,7 +171,7 @@ export async function simpleLLMCall(
         const bodyTokenEstimate = Math.ceil(bodySize / 3);
         console.log("[simpleLLMCall] Request:", { url: fetchUrl.slice(0, 80), bodySize, bodyTokenEstimate, model: config.defaultModel });
 
-        const res = await fetch(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
+        const res = await sendLlmRequest(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
 
         if (!res.ok) {
             const errText = await res.text().catch(() => "");

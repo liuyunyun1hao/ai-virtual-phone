@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useContext, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { sendLlmRequest } from "@/lib/llm-http";
 import { Plus, RefreshCw, Rss, AlertCircle, FileEdit, Trash2, X, Check, Download, Upload, Loader2, Folder, FolderPlus, ChevronDown, ChevronRight, Wallet } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import type { ApiAccount, ApiConfig, ApiGroup, ApiPricingMode } from "@/lib/settings-types";
@@ -354,7 +355,8 @@ export function ApiSettings() {
             const headers: Record<string, string> = { "Content-Type": "application/json" };
             if (!isGoogleNative) headers["Authorization"] = `Bearer ${config.apiKey}`;
 
-            const response = await fetch(url, { method: "GET", headers });
+            // 需要服务端转发的目标（如 opencode.ai）走 /api/llm-proxy，否则浏览器直连会被 CORS 拦
+            const response = await sendLlmRequest(url, { method: "GET", headers });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
