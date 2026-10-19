@@ -35,19 +35,42 @@ export async function synthesizeSpeech(
 
     const provider = voiceConfig.provider;
 
+    // 方括号语气标签（[exhales softly] / [whispers]）只有 ElevenLabs 的 v3/v4 会
+    // "演"成语气。换成别的服务商，它们会被当成正文照念出来 —— 试听时会听到
+    // 机械地念出 "exhales softly"，非常破坏气氛。所以送合成前统一剥掉。
+    const tagCapable = provider === "ElevenLabs"
+        && /^eleven_(v3|v4)/i.test(voiceConfig.model || "");
+    const speakable = tagCapable ? text : stripAudioTags(text);
+    if (!speakable.trim()) return null;
+
     if (provider === "Minimax") {
-        return synthesizeMinimax(text, voiceConfig, options?.emotion);
+        return synthesizeMinimax(speakable, voiceConfig, options?.emotion);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(text, voiceConfig);
+        return synthesizeOpenAI(speakable, voiceConfig);
     }
 
     if (provider === "ElevenLabs") {
-        return synthesizeElevenLabs(text, voiceConfig);
+        return synthesizeElevenLabs(speakable, voiceConfig);
     }
 
     return null;
+}
+
+/**
+ * 剥掉方括号语气标签。
+ * 只处理"短的、像指令的"方括号片段（≤60 字），避免误伤正文里的 [1] 之类；
+ * 剥完把连续的空白和多余标点收一收，别留下 "……  …" 这种空洞。
+ */
+export function stripAudioTags(text: string): string {
+    return text
+        .replace(/\[[^\]\n]{1,60}\]/g, " ")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/\.{3,}/g, "…")
+        .replace(/(…\s*){2,}/g, "…")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
 }
 
 // A stalled TTS request (TCP connected but no response — cold start, rate-limit
