@@ -1,31 +1,35 @@
 /**
  * 内置 CSS 主题方案。
  *
- * 参考风格：iMessage 古早简约风（复古四色 + 暗黑模式）
+ * 风格：极简黑白（参考原生简约风）
  * 作用范围：chat_app —— 联系人列表 + 朋友圈 + 所有聊天室的默认样式
  *
- * 为什么做成内置方案而不是让用户粘贴：
- * 这套 CSS 有几百行，在手机上选中复制再粘贴到手写框里很容易出错。
- * 做成方案后，用户点一下「方案 → 载入」就套上了。
+ * 为什么做成内置方案而不是让用户粘贴一段 CSS：
+ * 这套有 7KB 左右，在手机上选中复制再粘到手写框里很容易漏字符。
+ * 做成方案后用户点一下「方案 → 载入」就套上了。
  *
- * ── 关于外观的几个设计决定 ──
+ * ── 这套设计的六条规则 ──
  *
- * 1. 「手绘感」怎么来的：不是图片，是三件事叠出来的 ——
- *    不对称圆角（`22px 20px 24px 18px / 20px 24px 18px 22px`，横竖半径都不一样）、
- *    带墨色的细描边、以及偏移 1~2px 的硬阴影。三者合起来就像钢笔勾的框。
- *    没用 transform 旋转：气泡有 overflow:hidden 和测量逻辑，转一点点就可能被裁。
+ * 1. 没有渐变。上一版翻车就翻在这 —— 珠光渐变 + 彩色顶栏 + 手绘描边
+ *    叠在一起太吵。极简的做法是每屏只留一种「表面」：
+ *    白底 + 浅灰卡片，靠层次而不是靠颜色区分。
  *
- * 2. 顶栏的「光泽」：早期 iOS 那种塑料高光，用两层 linear-gradient 叠出来 ——
- *    上层是白色半透明从亮到透明的渐变（高光带），下层才是主色。
- *    比伪元素安全（.page-header 可能已经被别处用了 ::before/::after）。
+ * 2. 没有描边、没有阴影。卡片和气泡的边界全靠填充色的明度差表达。
+ *    只在顶栏/输入栏这种需要切分的地方留一条 1px 的极淡分隔线。
  *
- * 3. 字体：引了 DotGothic16（Google Fonts 的像素风字体）。
- *    它的拉丁字母和数字是点阵的，中文会回落到系统字体 —— 正好，
- *    中文用点阵体会很难认。如果网络取不到这个字体，回落链也保证能用。
- *    @import 会被样式作用域器原样透传（css-scoper.ts 里专门放行了 @import）。
+ * 3. 我方气泡也是浅灰底 + 黑字。默认主题里它是微信绿配白字；
+ *    极简风里两侧都是灰调，只靠左右对齐区分。
  *
- * 4. 暗黑模式用 prefers-color-scheme 跟随系统：这个应用本身没有暗色主题开关，
- *    跟随系统是唯一不需要改应用代码的做法。
+ * 4. 强调色是黑，不是绿也不是蓝。所以 --c-success（开关打开时的颜色）
+ *    和 --c-action-blue 都要覆写成墨色，否则会漏出绿色的开关和蓝色按钮。
+ *
+ * 5. 分区标签做成大写 + 宽字距 + 极小字号（PROFILE / DISPLAY 那种）。
+ *    这是这套视觉最容易被忽略、但最能出味道的地方。
+ *
+ * 6. 层级靠字重和字距做，不靠颜色：标题 600、正文常规、次级信息小字浅灰。
+ *
+ * 暗色模式跟随系统（应用本身没有暗色开关，prefers-color-scheme 是唯一
+ * 不改应用代码的做法）。
  */
 
 export type BuiltinCssScheme = {
@@ -37,367 +41,357 @@ export type BuiltinCssScheme = {
     css: string;
 };
 
-type Palette = {
-    /** 页面渐变的三段色（浅→中→深） */
-    bgA: string;
-    bgB: string;
-    bgC: string;
-    /** 顶栏渐变 */
-    barA: string;
-    barB: string;
-    /** 我方气泡渐变 */
-    meA: string;
-    meB: string;
-    /** 对方气泡底色 */
-    other: string;
-    /** 墨色（描边用） */
+type Mono = {
+    pageBg: string;
+    headerBg: string;
+    cardBg: string;
+    fieldBg: string;
+    bubbleSelf: string;
+    bubbleOther: string;
     ink: string;
-    /** 强调色 */
-    accent: string;
-    /** 纸感卡片底色 */
-    card: string;
-    /** 卡片描边 */
-    line: string;
-    /** 主要文字 */
-    textTitle: string;
-    /** 次要文字 */
-    text: string;
+    inkDim: string;
+    inkFaint: string;
+    hairline: string;
 };
 
-const PALETTES: Record<string, Palette> = {
-    mist: {
-        bgA: "#EDE9F8", bgB: "#DFE6F8", bgC: "#F2ECF7",
-        barA: "#AFC9EA", barB: "#7FA6D6",
-        meA: "#8FB6E8", meB: "#6E9BD4",
-        other: "#FBFAF5",
-        ink: "#4A4C63", accent: "#5B7FC7",
-        card: "#FFFFFF", line: "#D9DAE8",
-        textTitle: "#2F3145", text: "#7B7E93",
+const MONO: Record<string, Mono> = {
+    plain: {
+        pageBg: "#FFFFFF", headerBg: "#FFFFFF", cardBg: "#F5F5F7", fieldBg: "#F2F2F5",
+        bubbleSelf: "#E8E8EC", bubbleOther: "#F6F6F8",
+        ink: "#111114", inkDim: "#8A8A91", inkFaint: "#B4B4BB", hairline: "#EDEDF0",
     },
-    sakura: {
-        bgA: "#FBE9EE", bgB: "#F7E3EC", bgC: "#FDF2F1",
-        barA: "#F3B9C9", barB: "#E894AC",
-        meA: "#F0A8BE", meB: "#E285A2",
-        other: "#FFFAF8",
-        ink: "#6A4A55", accent: "#D9748F",
-        card: "#FFFFFF", line: "#F0D8DE",
-        textTitle: "#4A3038", text: "#96808A",
+    warm: {
+        pageBg: "#FBFAF8", headerBg: "#FBFAF8", cardBg: "#F4F2EE", fieldBg: "#F1EFEB",
+        bubbleSelf: "#E7E4DE", bubbleOther: "#F5F3F0",
+        ink: "#1A1816", inkDim: "#8C8880", inkFaint: "#B6B1A8", hairline: "#ECE9E4",
     },
-    mint: {
-        bgA: "#E4F2EC", bgB: "#DCEEF0", bgC: "#F0F6EE",
-        barA: "#A8D8C8", barB: "#7FC0AC",
-        meA: "#96CFBB", meB: "#75BAA2",
-        other: "#FBFBF6",
-        ink: "#415C54", accent: "#5FAE95",
-        card: "#FFFFFF", line: "#D5E6DE",
-        textTitle: "#2C423B", text: "#77938A",
+    cool: {
+        pageBg: "#FBFCFD", headerBg: "#FBFCFD", cardBg: "#F1F3F6", fieldBg: "#EEF1F5",
+        bubbleSelf: "#E4E8EE", bubbleOther: "#F3F5F8",
+        ink: "#12151A", inkDim: "#848B96", inkFaint: "#AEB5BF", hairline: "#E9ECF1",
     },
-    cocoa: {
-        bgA: "#F5EDE3", bgB: "#EFE6DE", bgC: "#FAF4EC",
-        barA: "#D8C0A4", barB: "#C0A281",
-        meA: "#CBAA86", meB: "#B08F6B",
-        other: "#FFFCF7",
-        ink: "#5C4736", accent: "#A5794F",
-        card: "#FFFFFF", line: "#E8DACB",
-        textTitle: "#463527", text: "#97836F",
+    paper: {
+        pageBg: "#FAFAF9", headerBg: "#FAFAF9", cardBg: "#F2F2F0", fieldBg: "#EFEFEC",
+        bubbleSelf: "#E6E6E2", bubbleOther: "#F4F4F1",
+        ink: "#17171A", inkDim: "#88888C", inkFaint: "#B2B2B5", hairline: "#EAEAE7",
     },
 };
 
-/** 把调色板灌进样式骨架 */
-function skin(p: Palette): string {
-    return `/* ═══ 复古简约 · iMessage 古早风 ═══ */
-@import url("https://fonts.googleapis.com/css2?family=DotGothic16&display=swap");
+/** 把配色灌进样式骨架 */
+function skin(p: Mono): string {
+    return `/* ═══ 极简黑白 ═══ */
+/* 白底、浅灰卡片、黑色强调、无描边无阴影无渐变。 */
 
-/* ── 调色板 ── */
 :root {
-  --c-header-bg: ${p.barA};
-  --c-page-body-bg: ${p.bgB};
+  --c-header-bg: ${p.headerBg};
+  --c-page-body-bg: ${p.pageBg};
 
-  --c-bubble-self: ${p.meA};
-  --c-bubble-other: ${p.other};
+  --c-card: ${p.cardBg};
+  --c-card-border: transparent;
+  --c-panel: ${p.headerBg};
+  --c-panel-border: transparent;
 
-  --c-text-title: ${p.textTitle};
-  --c-text: ${p.text};
-  --c-icon: ${p.text};
-  --c-icon-active: ${p.accent};
+  --c-text-title: ${p.ink};
+  --c-text: ${p.inkDim};
+  --c-icon: ${p.inkFaint};
+  --c-icon-active: ${p.ink};
 
-  --c-input: ${p.card};
-  --c-input-border: ${p.line};
-  --c-card: ${p.card};
-  --c-card-border: ${p.line};
+  --c-input: ${p.fieldBg};
+  --c-input-border: transparent;
 
-  /* 这套皮肤自己的变量 */
-  --rt-ink: ${p.ink};
-  --rt-ink-soft: ${p.ink}33;
-  --rt-accent: ${p.accent};
-  --rt-line: ${p.line};
-  --rt-font: "DotGothic16", -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* 我方气泡也是浅灰底 —— 极简风靠左右对齐区分，不靠颜色 */
+  --c-bubble-self: ${p.bubbleSelf};
+  --c-bubble-other: ${p.bubbleOther};
 
-  --app-font-family: var(--rt-font);
+  /* 强调色一律压成墨色。不覆写的话开关会是绿的、按钮会是蓝的，
+     跟这套黑白完全不搭。 */
+  --c-success: ${p.ink};
+  --c-action-blue: ${p.ink};
+  --c-warning: ${p.inkDim};
+
+  --mn-ink: ${p.ink};
+  --mn-dim: ${p.inkDim};
+  --mn-faint: ${p.inkFaint};
+  --mn-card: ${p.cardBg};
+  --mn-field: ${p.fieldBg};
+  --mn-hair: ${p.hairline};
 }
 
-/* ══ 1. 背景：珍珠渐变 ══
-   斜向三段渐变打底，叠一层从左上打下来的白光，做出"珠光纸"的感觉。 */
+/* ══ 1. 背景：纯色，不要渐变 ══ */
 .chat-app,
 .chat-room-wrapper,
 .chat-app .page-body {
-  background:
-    radial-gradient(130% 80% at 12% -10%, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0) 58%),
-    radial-gradient(90% 60% at 100% 100%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 60%),
-    linear-gradient(165deg, ${p.bgA} 0%, ${p.bgB} 46%, ${p.bgC} 100%);
-  background-attachment: fixed;
+  background: ${p.pageBg};
+  background-image: none;
 }
 
-/* ══ 2. 顶栏：早期 iOS 的塑料光泽 ══
-   上层是白色高光带（上亮下透），下层是主色渐变。 */
+/* ══ 2. 顶栏：白底黑字 + 一条发丝线 ══
+   参考里顶栏跟页面同色，只靠一条极淡的线切开。 */
 .page-header {
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.30) 42%, rgba(255,255,255,0.04) 56%, rgba(255,255,255,0) 100%),
-    linear-gradient(180deg, ${p.barA} 0%, ${p.barB} 100%);
-  border-bottom: 1.5px solid var(--rt-ink-soft);
-  border-radius: 0 0 16px 16px;
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.9),
-    0 3px 12px -2px ${p.ink}30;
+  background: ${p.headerBg};
+  background-image: none;
   backdrop-filter: none;
+  border-bottom: 1px solid ${p.hairline};
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .page-title,
 .page-back-btn,
 .page-header-content button {
-  color: #fff;
-  text-shadow: 0 1px 0 ${p.ink}45;
-  letter-spacing: 0.4px;
+  color: ${p.ink};
+  text-shadow: none;
 }
 
-/* 顶栏里的小胶囊按钮（返回/Messages/Edit 那种） */
-.page-header button.ui-btn,
-.page-header .ui-chip {
-  background: rgba(255,255,255,0.30);
-  border: 1px solid rgba(255,255,255,0.55);
-  border-radius: 12px;
-  color: #fff;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+/* 参考里页面标题是宽字距的（"CONTACT PROFILE" / "CHAT SETTINGS"）。
+   中文不受 text-transform 影响，但会吃到字距，看起来也更松弛。 */
+.page-title {
+  font-weight: 600;
+  letter-spacing: 1px;
 }
 
-/* ══ 3. 气泡：手绘感 ══
-   不对称圆角 + 墨色描边 + 1~2px 硬阴影。 */
+/* ══ 3. 气泡：浅灰填充，无描边无阴影 ══ */
 .chat-bubble-role-assistant,
 .chat-bubble-role-user,
 .chat-stream-bubble {
-  border: 1.5px solid var(--rt-ink);
-  font-family: var(--rt-font);
-  letter-spacing: 0.2px;
-  backdrop-filter: none;
-  box-shadow:
-    1.5px 2px 0 -0.5px var(--rt-ink-soft),
-    inset 0 1px 0 rgba(255,255,255,0.6);
+  border: none;
+  box-shadow: none;
+  border-radius: 18px;
 }
 
 .chat-bubble-role-assistant {
-  background: ${p.other};
-  color: ${p.textTitle};
-  border-radius: 20px 22px 19px 23px / 22px 19px 23px 20px;
+  background: ${p.bubbleOther};
+  color: ${p.ink};
 }
 
+/* 注意是黑字 —— 默认主题里我方气泡是绿底白字，这里背景浅了，字必须压深 */
 .chat-bubble-role-user {
-  background: linear-gradient(170deg, ${p.meA} 0%, ${p.meB} 100%);
-  color: #fff;
-  border-radius: 22px 19px 23px 20px / 19px 23px 20px 22px;
-  box-shadow:
-    1.5px 2px 0 -0.5px ${p.ink}40,
-    inset 0 1px 0 rgba(255,255,255,0.45);
+  background: ${p.bubbleSelf};
+  color: ${p.ink};
 }
 
-/* 流式生成中的气泡跟着对方气泡走 */
-.chat-stream-bubble {
-  border-radius: 20px 22px 19px 23px / 22px 19px 23px 20px;
-}
-
-/* ══ 4. 头像：复古描边框 ══ */
+/* ══ 4. 头像：圆形，无描边 ══ */
 .chat-msg-avatar,
 .chat-contact-avatar,
 .chat-contact-card-avatar {
-  border: 1.5px solid var(--rt-ink);
-  border-radius: 10px 11px 9px 12px;
-  box-shadow: 1px 1.5px 0 -0.5px var(--rt-ink-soft);
-  overflow: hidden;
-  background: ${p.card};
+  border: none;
+  border-radius: 50%;
+  box-shadow: none;
 }
 
-/* 群里的发言人名字 */
 .chat-group-sender-name,
 .chat-contact-name {
-  font-family: var(--rt-font);
-  color: var(--rt-ink);
-  letter-spacing: 0.3px;
+  color: ${p.ink};
+  font-weight: 500;
 }
 
-/* ══ 5. 输入栏：纸面输入框 ══ */
+/* ══ 5. 输入栏 ══ */
 .chat-input-bar {
-  background: rgba(255,255,255,0.78);
-  backdrop-filter: blur(14px) saturate(1.2);
-  border-top: 1.5px solid var(--rt-ink-soft);
-  border-radius: 18px 18px 0 0;
-  box-shadow: 0 -2px 12px -4px ${p.ink}30;
+  background: ${p.headerBg};
+  backdrop-filter: none;
+  border-top: 1px solid ${p.hairline};
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .chat-input-bar textarea,
 .chat-input-bar input {
-  background: ${p.card};
-  border: 1.5px solid var(--rt-line);
-  border-radius: 16px;
-  color: var(--c-text-title, ${p.textTitle});
-  font-family: var(--rt-font);
+  background: ${p.fieldBg};
+  border: none;
+  border-radius: 18px;
+  color: ${p.ink};
 }
 
 .chat-input-bar textarea:focus,
 .chat-input-bar input:focus {
-  border-color: var(--rt-accent);
-  box-shadow: 0 0 0 2px ${p.accent}26;
+  border: none;
+  box-shadow: none;
+  outline: none;
 }
 
-/* ══ 6. 标签栏：分段胶囊 ══ */
+/* ══ 6. 标签栏 / 分段控件 ══ */
 .chat-tab-bar {
-  background: rgba(255,255,255,0.72);
-  backdrop-filter: blur(18px) saturate(1.3);
-  border-top: 1.5px solid var(--rt-ink-soft);
-  border-radius: 20px 20px 0 0;
+  background: ${p.headerBg};
+  backdrop-filter: none;
+  border-top: 1px solid ${p.hairline};
+  border-radius: 0;
 }
 
 .chat-tab {
-  color: var(--c-text, ${p.text});
-  font-family: var(--rt-font);
-  transition: color .18s ease, background .18s ease;
+  color: ${p.inkFaint};
 }
 
 .chat-tab-active,
 .chat-tab[data-active] {
-  color: var(--rt-accent);
-  background: rgba(255,255,255,0.85);
-  border-radius: 14px;
-  box-shadow: 1px 1.5px 0 -0.5px var(--rt-ink-soft);
+  background: transparent;
+  color: ${p.ink};
+  border-radius: 0;
+  box-shadow: none;
 }
 
-/* 顶部分段控件（Solitude / Epiphany / Nyota / Trouvaille 那种） */
+/* 顶部分段胶囊（Chats / Group / Friends 那种）：容器浅灰，选中项浮白 */
 .chat-list-tab {
-  background: rgba(255,255,255,0.55);
-  border: 1.5px solid var(--rt-ink-soft);
+  background: ${p.fieldBg};
+  border: none;
   border-radius: 999px;
-  color: var(--c-text, ${p.text});
-  font-family: var(--rt-font);
+  color: ${p.inkDim};
 }
 
 .chat-list-tab[data-active],
 .chat-list-tab.is-active {
-  background: ${p.card};
-  color: var(--rt-ink);
-  box-shadow: 1px 1.5px 0 -0.5px var(--rt-ink-soft);
+  background: ${p.headerBg};
+  color: ${p.ink};
+  box-shadow: 0 1px 3px rgba(0,0,0,0.07);
 }
 
-/* ══ 7. 卡片 / 列表：毛玻璃纸片 ══ */
+/* ══ 7. 卡片：浅灰填充，无描边无阴影 ══ */
 .chat-contact-card,
 .chat-app-card,
 .chat-thought-card,
 .chat-system-instruction-card,
 .feed-post,
 .feed-profile {
-  background: rgba(255,255,255,0.82);
-  backdrop-filter: blur(16px) saturate(1.15);
-  border: 1.5px solid var(--rt-ink-soft);
-  border-radius: 20px 21px 19px 22px;
-  box-shadow: 1.5px 2px 0 -0.5px var(--rt-ink-soft);
+  background: ${p.cardBg};
+  border: none;
+  box-shadow: none;
+  border-radius: 20px;
 }
 
-/* 搜索框 */
+/* ══ 8. 开关：黑色，不是绿色 ══ */
+.ui-toggle {
+  background: ${p.fieldBg};
+}
+
+.ui-toggle[data-checked] {
+  background: ${p.ink};
+}
+
+.ui-toggle-knob {
+  box-shadow: 0 1px 2px rgba(0,0,0,0.14);
+}
+
+/* ══ 9. 按钮 ══ */
+.ui-btn-primary,
+.ui-btn-action,
+.ui-btn-success {
+  background: ${p.ink};
+  color: ${p.headerBg};
+  border: none;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.ui-btn-outline,
+.ui-btn-ghost,
+.ui-btn-soft-action,
+.ui-btn-bordered-ghost {
+  background: ${p.fieldBg};
+  color: ${p.ink};
+  border: none;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+/* ══ 10. 分区标签：大写 + 宽字距 + 极小字号 ══
+   参考里 PROFILE / DISPLAY / AVATAR SIZE 那种。这是这套视觉最出味道的地方，
+   也最容易被忽略 —— 不加这一条，整体会显得普通。 */
+.chat-app-card-section-title,
+.menu-desc {
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-size: calc(10.5px * var(--app-text-scale, 1));
+  color: ${p.inkFaint};
+  font-weight: 500;
+}
+
+/* ══ 11. 搜索框 ══ */
 .chat-search-bar,
 .chat-search-input {
-  background: rgba(255,255,255,0.72);
-  border: 1.5px solid var(--rt-line);
+  background: ${p.fieldBg};
+  border: none;
   border-radius: 999px;
-  font-family: var(--rt-font);
+  color: ${p.ink};
 }
 
-/* ══ 8. 语音条 ══ */
+/* ══ 12. 语音条：波形和时长用墨色 ══ */
 .voice-msg-bubble {
-  background: linear-gradient(170deg, ${p.meA} 0%, ${p.meB} 100%);
-  border: 1.5px solid var(--rt-ink);
-  border-radius: 20px 22px 19px 23px;
-  box-shadow: 1.5px 2px 0 -0.5px var(--rt-ink-soft);
+  background: ${p.bubbleSelf};
+  border: none;
+  box-shadow: none;
+  border-radius: 18px;
 }
 
 .voice-msg-bar {
-  background: rgba(255,255,255,0.92);
+  background: ${p.ink};
   border-radius: 2px;
 }
 
 .voice-msg-dur {
-  color: rgba(255,255,255,0.95);
-  font-family: var(--rt-font);
+  color: ${p.inkDim};
 }
 
-/* 时间分隔条 */
-.chat-time-divider,
-.chat-sys-msg {
-  font-family: var(--rt-font);
-  color: var(--rt-ink);
-}
-
+/* 时间分隔 / 系统消息：不要胶囊底色 */
 .chat-sys-msg > * {
-  background: rgba(255,255,255,0.78);
-  border: 1px solid var(--rt-ink-soft);
-  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: ${p.inkFaint};
 }
 
-/* ══ 9. 暗黑模式（跟随系统）══
-   应用本身没有暗色开关，跟随系统是唯一不改代码就能做到的方式。 */
+/* ══ 13. 暗黑模式（跟随系统）══ */
 @media (prefers-color-scheme: dark) {
   :root {
-    --c-text-title: #E8E6F0;
-    --c-text: #9C9AAD;
-    --c-icon: #9C9AAD;
-    --c-icon-active: #A8BCE8;
-    --c-input: #2A2B38;
-    --c-input-border: #3D3F50;
-    --c-card: #2A2B38;
-    --c-card-border: #3D3F50;
-    --c-bubble-other: #2E2F3E;
-    --rt-ink: #8E90A8;
-    --rt-ink-soft: #8E90A833;
-    --rt-line: #3D3F50;
+    --c-header-bg: #0E0E10;
+    --c-page-body-bg: #0E0E10;
+    --c-card: #1C1C1F;
+    --c-panel: #0E0E10;
+    --c-text-title: #F2F2F4;
+    --c-text: #8E8E95;
+    --c-icon: #6E6E75;
+    --c-icon-active: #F2F2F4;
+    --c-input: #1C1C1F;
+    --c-bubble-self: #2C2C31;
+    --c-bubble-other: #1C1C1F;
+    --c-success: #F2F2F4;
+    --c-action-blue: #F2F2F4;
+    --mn-ink: #F2F2F4;
+    --mn-dim: #8E8E95;
+    --mn-faint: #6E6E75;
+    --mn-card: #1C1C1F;
+    --mn-field: #1C1C1F;
+    --mn-hair: #26262A;
   }
 
   .chat-app,
   .chat-room-wrapper,
   .chat-app .page-body {
-    background:
-      radial-gradient(130% 80% at 12% -10%, rgba(120,130,190,0.22) 0%, rgba(0,0,0,0) 58%),
-      linear-gradient(165deg, #1B1C26 0%, #202130 46%, #24202C 100%);
-    background-attachment: fixed;
+    background: #0E0E10;
+    background-image: none;
   }
 
-  .page-header {
-    background:
-      linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 48%, rgba(255,255,255,0) 100%),
-      linear-gradient(180deg, #3A3F55 0%, #2C3145 100%);
-    border-bottom-color: #ffffff1f;
+  .page-header,
+  .chat-input-bar,
+  .chat-tab-bar {
+    background: #0E0E10;
+    border-color: #26262A;
   }
 
   .chat-bubble-role-assistant {
-    background: #2E2F3E;
-    color: #E8E6F0;
+    background: #1C1C1F;
+    color: #F2F2F4;
   }
 
-  .chat-input-bar,
-  .chat-tab-bar {
-    background: rgba(30,31,42,0.82);
-    border-top-color: #ffffff1a;
+  .chat-bubble-role-user {
+    background: #2C2C31;
+    color: #F2F2F4;
   }
 
   .chat-input-bar textarea,
-  .chat-input-bar input {
-    background: #2A2B38;
-    color: #E8E6F0;
+  .chat-input-bar input,
+  .chat-search-bar,
+  .chat-search-input,
+  .chat-list-tab {
+    background: #1C1C1F;
+    color: #F2F2F4;
   }
 
   .chat-contact-card,
@@ -406,28 +400,36 @@ function skin(p: Palette): string {
   .chat-system-instruction-card,
   .feed-post,
   .feed-profile {
-    background: rgba(42,43,56,0.85);
-    color: #E8E6F0;
+    background: #1C1C1F;
+    color: #F2F2F4;
   }
 
-  .chat-search-bar,
-  .chat-search-input {
-    background: rgba(42,43,56,0.85);
-    color: #E8E6F0;
+  .ui-btn-primary,
+  .ui-btn-action,
+  .ui-btn-success {
+    background: #F2F2F4;
+    color: #0E0E10;
   }
 
-  .chat-sys-msg > * {
-    background: rgba(46,47,62,0.9);
+  .ui-btn-outline,
+  .ui-btn-ghost,
+  .ui-btn-soft-action {
+    background: #1C1C1F;
+    color: #F2F2F4;
+  }
+
+  .voice-msg-bar {
+    background: #F2F2F4;
   }
 }
 `;
 }
 
 export const BUILTIN_CHAT_APP_SCHEMES: BuiltinCssScheme[] = [
-    { id: "rt-mist", name: "复古简约 · 雾紫", desc: "原版配色：淡紫到淡蓝的珠光底，蓝色光泽顶栏", target: "chat_app", css: skin(PALETTES.mist) },
-    { id: "rt-sakura", name: "复古简约 · 樱粉", desc: "樱花粉调，暖一点", target: "chat_app", css: skin(PALETTES.sakura) },
-    { id: "rt-mint", name: "复古简约 · 薄荷", desc: "青绿调，最清爽", target: "chat_app", css: skin(PALETTES.mint) },
-    { id: "rt-cocoa", name: "复古简约 · 奶咖", desc: "奶油咖啡调，最暖", target: "chat_app", css: skin(PALETTES.cocoa) },
+    { id: "mn-plain", name: "极简 · 纯白", desc: "参考图那套：纯白底 + 浅灰卡片 + 黑色强调", target: "chat_app", css: skin(MONO.plain) },
+    { id: "mn-warm", name: "极简 · 暖白", desc: "偏暖的米白，长时间看眼睛舒服一点", target: "chat_app", css: skin(MONO.warm) },
+    { id: "mn-cool", name: "极简 · 冷灰", desc: "偏冷的灰白，更数码感", target: "chat_app", css: skin(MONO.cool) },
+    { id: "mn-paper", name: "极简 · 纸白", desc: "微灰纸面，对比最柔和", target: "chat_app", css: skin(MONO.paper) },
 ];
 
 /** 按 target 取内置方案（其他 target 暂时没有内置的） */
