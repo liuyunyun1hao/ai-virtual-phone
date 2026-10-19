@@ -23,6 +23,7 @@ import {
   UserRound,
   UsersRound,
   type LucideIcon,
+  ChevronRight,
 } from "lucide-react";
 import { DATA_MODULES, getLightModuleIds } from "@/lib/data-management/modules";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
@@ -63,6 +64,7 @@ import {
 import { clearStorageCategory, scanStorageSpace, type StorageCategoryId, type StorageCategoryStat } from "@/lib/storage-space";
 import { isAndroidBrowser, isIOSBrowser } from "@/lib/download-utils";
 import type { BackupManifest, DataModuleId, DataSnapshot, ImportResult, ModuleStats } from "@/lib/data-management/types";
+import { StorageCleanerApp } from "@/components/storage-cleaner/storage-cleaner-app";
 
 type PendingImport = {
   file: File;
@@ -294,6 +296,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
   const [overwriteShared, setOverwriteShared] = useState(false);
   const [overwriteCloudPrivate, setOverwriteCloudPrivate] = useState(false);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [cleanerOpen, setCleanerOpen] = useState(false);
   const [persistSupported, setPersistSupported] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -615,6 +618,23 @@ export function DataManagement({ onNotice }: DataManagementProps) {
 
   return (
     <div className="page-menu data-management-menu" style={{ padding: 0 }}>
+      {cleanerOpen && (
+        <StorageCleanerApp onClose={() => setCleanerOpen(false)} onNotice={onNotice} />
+      )}
+      <div className="data-section">
+        <DataSectionTitle>Storage Cleanup</DataSectionTitle>
+        <div className="menu-group">
+          <button type="button" className="menu-item" onClick={() => setCleanerOpen(true)}>
+            <DataSettingsIcon icon={Trash2} color={BINDING_ACCENTS.api} />
+            <div className="menu-label-group">
+              <span className="menu-label">存储清理</span>
+              <span className="menu-desc">按模块查看占用并清理；会先让你确认，删了不可恢复</span>
+            </div>
+            <span className="menu-right"><ChevronRight size={18} /></span>
+          </button>
+        </div>
+      </div>
+
       <div className="data-section">
         <DataSectionTitle>Module Breakdown</DataSectionTitle>
         <div className="menu-group">
