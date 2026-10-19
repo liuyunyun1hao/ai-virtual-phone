@@ -1,5 +1,8 @@
 import type { LLMContentPart, LLMMessage } from "./llm-prompt-assembler";
 import type { ApiConfig, PresetConfig } from "./settings-types";
+import { needsServerProxy } from "./llm-proxy-target";
+
+export { needsServerProxy };
 import {
     buildChatCompletionsUrl,
     buildRequestHeaders,
@@ -533,11 +536,13 @@ function buildOpenAICompatibleRequest(
             },
         }));
     }
+    const requestUrl = buildChatCompletionsUrl(baseUrl);
     return {
-        url: buildChatCompletionsUrl(baseUrl),
+        url: requestUrl,
         headers: buildRequestHeaders(config, baseUrl),
         body,
         providerKind: "openai-compatible",
+        serverProxy: needsServerProxy(requestUrl),
         messagesForLog: messages.map(messageForLog),
     };
 }
@@ -580,11 +585,13 @@ function buildAnthropicRequest(
             input_schema: tool.parameters,
         }));
     }
+    const requestUrl = `${baseUrl.replace(/\/$/, "")}/messages`;
     return {
-        url: `${baseUrl.replace(/\/$/, "")}/messages`,
+        url: requestUrl,
         headers: buildRequestHeaders(config, baseUrl),
         body,
         providerKind: "anthropic",
+        serverProxy: needsServerProxy(requestUrl),
         messagesForLog: messages.map(messageForLog),
     };
 }
