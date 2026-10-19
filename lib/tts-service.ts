@@ -1,6 +1,10 @@
 // lib/tts-service.ts — 语音合成服务
 
 import type { VoiceApiConfig, ContentAppId } from "./settings-types";
+import { stripAudioTags } from "./audio-tags";
+
+// 以前有代码从 tts-service 引 stripAudioTags，保持可用
+export { stripAudioTags };
 import { loadVoiceConfigs, loadBindingConfig, resolveBinding } from "./settings-storage";
 
 export type VoiceApiConfigResolved = VoiceApiConfig;
