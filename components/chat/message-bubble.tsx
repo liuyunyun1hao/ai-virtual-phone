@@ -2281,9 +2281,15 @@ function synthesizeVoiceForMessage(msgId: string, characterId: string, speechTex
     const task = (async () => {
         const { resolveVoiceConfig, synthesizeSpeech } = await import("@/lib/tts-service");
         const vc = resolveVoiceConfig(characterId);
-        if (!vc) throw new Error("未绑定语音配置");
-        const blob = await synthesizeSpeech(speechText, vc);
-        if (!blob) throw new Error("合成失败");
+        if (!vc) throw new Error("这个角色没有绑定语音配置 —— 去「设置 → 配置绑定」里给它选一个");
+        // 报错时带上用的是哪份配置。试听走的是界面上正在编辑的那份，
+        // 聊天走的是角色绑定的那份，两者常常不是同一个 —— 以前报错看不出用的哪份，
+        // 只能猜。现在直接把配置名摆在错误里。
+        const blob = await synthesizeSpeech(speechText, vc).catch((e: unknown) => {
+            const reason = e instanceof Error ? e.message : String(e);
+            throw new Error(`配置「${vc.name || vc.provider}」(${vc.provider})：${reason}`);
+        });
+        if (!blob) throw new Error(`配置「${vc.name || vc.provider}」没有返回音频`);
         const dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
