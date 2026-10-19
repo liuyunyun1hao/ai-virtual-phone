@@ -42,6 +42,7 @@ import { LocationCard } from "./location-map";
 import { getQuotePreview, normalizeQuotePreviewText } from "@/lib/chat-quote-preview";
 import { getHideAudioTags, useHideAudioTags } from "@/lib/chat-display-prefs";
 import { stripAudioTags } from "@/lib/audio-tags";
+import { voiceDisplayText } from "@/lib/voice-expression";
 
 interface MessageBubbleProps {
     quoteSource?: ChatMessage;
@@ -237,6 +238,12 @@ export function normalizeTextBubbleContent(content: string): string {
         .replace(/\[[^\]]*?(?:执行动作|工具调用)[:：][^\]]*?[（(][\s\S]*?[)）]\]/g, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+
+    // Y2K 的 {voice:...} 声音标记：它原本只在「语音条信封」那条路上被剥掉
+    // （rich-message-parser 的 [语音条:...] 分支），普通文字气泡会把它
+    // 原样显示给用户 —— 实测踩到，气泡里出现 "{voice:calm, firm tone}"。
+    // 这是控制标记不是内容，永远剥，不受下面那个开关影响。
+    cleaned = voiceDisplayText(cleaned);
 
     // 语气标签（[whispers] / [轻笑]）默认从气泡里抹掉，可在聊天设置里关。
     // 放在上面这些结构化标记之后：先把 [红包:5.00:1] 这类处理掉，再扫剩下的
