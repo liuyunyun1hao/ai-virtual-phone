@@ -8,6 +8,7 @@ import { loadVoiceConfigs, saveVoiceConfigs } from "@/lib/settings-storage";
 import { synthesizeSpeech } from "@/lib/tts-service";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { Toggle, Input } from "@/components/ui/form";
+import { loadApiConfigs } from "@/lib/settings-storage";
 import { Alert } from "@/components/ui/feedback";
 
 const SUPPORTED_VOICE_PROVIDERS = new Set(["Minimax", "OpenAI", "ElevenLabs"]);
@@ -251,12 +252,22 @@ export function VoiceSettings() {
     const [manualModelIds, setManualModelIds] = useState<Record<string, boolean>>({});
     const [manualVoiceIds, setManualVoiceIds] = useState<Record<string, boolean>>({});
     const [isLoaded, setIsLoaded] = useState(false);
+    // 「TTS 前用模型改写」要选一个 API 配置来跑改写
+    const [apiConfigList, setApiConfigList] = useState<{ id: string; name?: string }[]>([]);
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     // Fetching states for Voices
     const [isFetching, setIsFetching] = useState<Record<string, boolean>>({});
     const [fetchedVoices, setFetchedVoices] = useState<Record<string, VoiceOption[]>>({});
     const [fetchError, setFetchError] = useState<Record<string, string>>({});
+
+    useEffect(() => {
+        try {
+            setApiConfigList(loadApiConfigs().map(c => ({ id: c.id, name: c.name })));
+        } catch {
+            setApiConfigList([]);
+        }
+    }, []);
 
     // Load from localStorage on mount
     useEffect(() => {
@@ -863,6 +874,39 @@ export function VoiceSettings() {
                                                         <option value="opus_48000_96">opus_48000_96</option>
                                                     </select>
                                                 </div>
+                                                <div className="flex flex-col gap-1">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="flex flex-col">
+                                                            <label className="menu-desc ml-1">合成前用模型改写台词（呼吸/动作标签）</label>
+                                                            <span className="menu-desc ml-1">
+                                                                关掉就是原文直读。开着会先让模型把句子改出停顿和情绪，再送 ElevenLabs ——
+                                                                每条语音多花一次模型调用，但同一条消息只改一次。
+                                                            </span>
+                                                        </div>
+                                                        <Toggle
+                                                            checked={!!config.enableTtsRewrite}
+                                                            onChange={(v) => updateConfig(config.id, { enableTtsRewrite: v })}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                {config.enableTtsRewrite && (
+                                                    <div className="flex flex-col gap-1">
+                                                        <label className="menu-desc ml-1">用哪个 API 配置改写</label>
+                                                        <select
+                                                            value={config.rewriteApiConfigId || ""}
+                                                            onChange={(e) => updateConfig(config.id, { rewriteApiConfigId: e.target.value })}
+                                                            className="ui-select"
+                                                        >
+                                                            <option value="">（默认：第一个）</option>
+                                                            {apiConfigList.map(c => (
+                                                                <option key={c.id} value={c.id}>{c.name || c.id}</option>
+                                                            ))}
+                                                        </select>
+                                                        <span className="menu-desc ml-1">
+                                                            改写要跑一次模型，用便宜快的那个更划算。
+                                                        </span>
+                                                    </div>
+                                                )}
                                             </>
                                         )}
 

@@ -40,7 +40,20 @@ export async function synthesizeSpeech(
     // 机械地念出 "exhales softly"，非常破坏气氛。所以送合成前统一剥掉。
     const tagCapable = provider === "ElevenLabs"
         && /^eleven_(v3|v4)/i.test(voiceConfig.model || "");
-    const speakable = tagCapable ? text : stripAudioTags(text);
+
+    // 可选：送合成前先让模型把台词改写成带呼吸/动作标签的配音脚本。
+    // 放在这个入口而不是各个调用点，是为了让语音条、语音通话、视频通话、
+    // 群组通话四处自动都生效。
+    // 失败就当没开 —— 改写是锦上添花，不该让语音整个哑掉。
+    let source = text;
+    if (voiceConfig.enableTtsRewrite) {
+        const { rewriteForTts } = await import("./tts-rewrite");
+        const rewritten = await rewriteForTts(text, { apiConfigId: voiceConfig.rewriteApiConfigId });
+        if (rewritten.text && !rewritten.error) source = rewritten.text;
+        else if (rewritten.error) console.warn("[tts] 改写失败，用原文合成:", rewritten.error);
+    }
+
+    const speakable = tagCapable ? source : stripAudioTags(source);
     if (!speakable.trim()) return null;
 
     if (provider === "Minimax") {

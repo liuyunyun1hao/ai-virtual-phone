@@ -249,6 +249,10 @@ export type VoiceApiConfig = {
     styleExaggeration?: number;
     /** ElevenLabs 输出格式（查询参数 output_format，默认 mp3_44100_128）。 */
     outputFormat?: string;
+    /** 送合成前先用模型把台词改写成配音脚本（加呼吸/动作标签）。 */
+    enableTtsRewrite?: boolean;
+    /** 改写用哪个 API 配置；不填就用第一个。 */
+    rewriteApiConfigId?: string;
     customVoices?: { id: string; name: string; createdAt?: number }[];
     enableSTT: boolean;
     enableTTS: boolean;
