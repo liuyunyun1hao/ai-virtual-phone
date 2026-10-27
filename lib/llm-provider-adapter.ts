@@ -6,6 +6,7 @@ import {
     determineBaseUrl,
     isNativeAnthropicApi,
     isNativeGoogleApi,
+    needsServerProxy,
     stripHallucinatedTimestamps,
 } from "./api-helpers";
 import { resolveEnabledGenerationParameters } from "./generation-parameters";
@@ -258,13 +259,15 @@ export function buildProviderRequest(
     const guardedMessages = config.enableImageRecognition === true ? messages : stripVisionParts(messages);
     const providerMessages = ensureProviderHasUserMessage(normalizeNativeToolMessageAdjacency(guardedMessages));
 
-    if (providerKind === "anthropic") {
-        return buildAnthropicRequest(config, preset, baseUrl, providerMessages, options);
-    }
-    if (providerKind === "gemini") {
-        return buildGeminiRequest(config, preset, baseUrl, providerMessages, options);
-    }
-    return buildOpenAICompatibleRequest(config, preset, baseUrl, providerMessages, options);
+    const payload = providerKind === "anthropic"
+        ? buildAnthropicRequest(config, preset, baseUrl, providerMessages, options)
+        : providerKind === "gemini"
+            ? buildGeminiRequest(config, preset, baseUrl, providerMessages, options)
+            : buildOpenAICompatibleRequest(config, preset, baseUrl, providerMessages, options);
+
+    // OpenCode Go / Console 网关未开放浏览器 CORS，统一改由本站 /api/llm-proxy 转发
+    if (needsServerProxy(config)) payload.serverProxy = true;
+    return payload;
 }
 
 // 剥离逻辑收敛到 api-helpers（更底层，微信助手运行时也照抄同一份正则）；

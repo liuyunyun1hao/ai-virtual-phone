@@ -9,7 +9,7 @@ import { generateEmbedding, isEmbeddingModelName } from "@/lib/memory-embedding"
 import { ConfirmDialog } from "@/components/ui/modal";
 import { Toggle, Input } from "@/components/ui/form";
 import { Alert } from "@/components/ui/feedback";
-import { determineBaseUrl, simpleLLMCall } from "@/lib/api-helpers";
+import { determineBaseUrl, needsServerProxy, simpleLLMCall } from "@/lib/api-helpers";
 
 const DEFAULT_CONFIGS: ApiConfig[] = [
     {
@@ -127,14 +127,24 @@ export function ApiSettings() {
             const modelsBase = baseUrl
                 .replace(/\/$/, "")
                 .replace(/\/(chat\/completions|completions|embeddings|messages)$/i, "");
-            const modelsUrl = /\/models$/i.test(modelsBase) ? modelsBase : `${modelsBase}/models`;
+            // OpenCode 网关的模型清单在 /inference/v1/models（不是 /inference/openai/v1/models）
+            const modelsUrl = config.provider === "OpenCodeGo"
+                ? "https://opencode.ai/inference/v1/models"
+                : /\/models$/i.test(modelsBase) ? modelsBase : `${modelsBase}/models`;
             const url = isGoogleNative
                 ? `${modelsUrl}?key=${encodeURIComponent(config.apiKey)}`
                 : modelsUrl;
             const headers: Record<string, string> = { "Content-Type": "application/json" };
             if (!isGoogleNative) headers["Authorization"] = `Bearer ${config.apiKey}`;
 
-            const response = await fetch(url, { method: "GET", headers });
+            // OpenCode 网关没有浏览器 CORS，模型列表也走本站代理
+            const response = needsServerProxy(config)
+                ? await fetch("/api/llm-proxy", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ url, method: "GET", headers }),
+                })
+                : await fetch(url, { method: "GET", headers });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
@@ -148,6 +158,12 @@ export function ApiSettings() {
                 modelNames = data.models.map((m: { name: string }) => (m.name || "").replace(/^models\//, ""));
             } else if (Array.isArray(data?.data)) {
                 modelNames = data.data.map((m: { id: string }) => m.id);
+            } else if (Array.isArray(data?.models)) {
+                modelNames = data.models.map((m: { id?: string; name?: string } | string) =>
+                    typeof m === "string" ? m : String(m.id || m.name || ""));
+            } else if (Array.isArray(data)) {
+                modelNames = data.map((m: { id?: string; name?: string } | string) =>
+                    typeof m === "string" ? m : String(m.id || m.name || ""));
             } else {
                 throw new Error("返回数据格式不符合预期");
             }
@@ -322,6 +338,7 @@ export function ApiSettings() {
                                                 <option value="Zhipu">Zhipu (GLM)</option>
                                                 <option value="SiliconFlow">SiliconFlow</option>
                                                 <option value="TogetherAI">Together AI</option>
+                                                <option value="OpenCodeGo">OpenCode Go（官方网关）</option>
                                                 <option value="Custom">自定义 (Custom)</option>
                                             </select>
                                         </div>
@@ -335,6 +352,11 @@ export function ApiSettings() {
                                                         中转站填 https://xxx/v1beta 走原生协议
                                                     </span>
                                                 )}
+                                                {config.provider === "OpenCodeGo" && (
+                                                    <span style={{ color: "#888", marginLeft: 6, fontSize: "0.85em" }}>
+                                                        默认 opencode.ai/inference/openai/v1，请求经本站 /api/llm-proxy 转发
+                                                    </span>
+                                                )}
                                             </label>
                                             <Input
                                                 type="url"
@@ -345,7 +367,9 @@ export function ApiSettings() {
                                                         ? "https://api.example.com/v1"
                                                         : config.provider === "Google"
                                                             ? "https://your-proxy.example.com/v1beta"
-                                                            : "默认用官方端点，留空即可"
+                                                            : config.provider === "OpenCodeGo"
+                                                                ? "https://opencode.ai/inference/openai/v1"
+                                                                : "默认用官方端点，留空即可"
                                                 }
                                             />
                                         </div>
@@ -356,7 +380,7 @@ export function ApiSettings() {
                                                 type="password"
                                                 value={config.apiKey}
                                                 onChange={(e) => updateConfig(config.id, { apiKey: e.target.value })}
-                                                placeholder="sk-..."
+                                                placeholder={config.provider === "OpenCodeGo" ? "OpenCode Console 的 API Key（sk-...）" : "sk-..."}
                                             />
                                         </div>
 

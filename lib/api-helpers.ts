@@ -25,6 +25,7 @@ export function determineBaseUrl(config: { provider: string; baseUrl?: string })
         case "Zhipu":       return "https://open.bigmodel.cn/api/paas/v4";
         case "SiliconFlow": return "https://api.siliconflow.cn/v1";
         case "TogetherAI":  return "https://api.together.xyz/v1";
+        case "OpenCodeGo":  return "https://opencode.ai/inference/openai/v1";
         case "Custom":      return ""; // must be set via baseUrl
         default:            return "";
     }
@@ -76,6 +77,15 @@ export function buildRequestHeaders(config: ApiConfig, baseUrl: string): Record<
  */
 export function isNativeAnthropicApi(config: ApiConfig): boolean {
     return config.provider === "Anthropic" && !config.baseUrl;
+}
+
+/**
+ * OpenCode Go / Console 网关（opencode.ai）没有开放浏览器 CORS，
+ * 且官方文档推荐的端点是 /inference/openai/v1（chat/completions）。
+ * 命中该 provider 时统一改发本站 /api/llm-proxy，由服务端转发。
+ */
+export function needsServerProxy(config: Pick<ApiConfig, "provider">): boolean {
+    return config.provider === "OpenCodeGo";
 }
 
 /**
@@ -200,7 +210,15 @@ export async function simpleLLMCall(
         const bodyTokenEstimate = Math.ceil(bodySize / 3);
         console.log("[simpleLLMCall] Request:", { url: fetchUrl.slice(0, 80), bodySize, bodyTokenEstimate, model: config.defaultModel });
 
-        const res = await fetch(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
+        const res = needsServerProxy(config) && typeof window !== "undefined"
+            // 浏览器侧：OpenCode 网关要经本站代理；服务端调用时没有 CORS 限制，直接发。
+            ? await fetch("/api/llm-proxy", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: fetchUrl, headers, body }),
+                signal: options?.signal,
+            })
+            : await fetch(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
 
         if (!res.ok) {
             const errText = await res.text().catch(() => "");
