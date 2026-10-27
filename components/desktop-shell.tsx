@@ -39,6 +39,7 @@ import { ShoppingApp } from "@/components/shopping/shopping-app";
 import { GameHubApp } from "@/components/game/game-hub-app";
 import { MixologyApp } from "@/components/mixology/mixology-app";
 import InterviewMagazineApp from "@/components/interview/interview-magazine-app";
+import { WeatherApp } from "@/components/weather/weather-app";
 import { CoCreateApp } from "@/components/cocreate/cocreate-app";
 import { AppMarketApp } from "@/components/app-market/app-market-app";
 import { CustomAppRunner } from "@/components/app-market/custom-app-runner";
@@ -4081,6 +4082,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
     if (activeApp === "checkphone") {
       return <CheckPhoneApp onClose={() => setActiveApp(null)} />;
+    }
+
+    if (activeApp === "weather") {
+      return <WeatherApp onClose={() => setActiveApp(null)} />;
     }
 
     if (activeApp === "shopping") {
