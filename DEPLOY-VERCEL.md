@@ -1,7 +1,7 @@
 # 部署到 Vercel（本仓库自定义版）
 
 本仓库是 [xiaolongbao0709/ai-virtual-phone](https://github.com/xiaolongbao0709/ai-virtual-phone) 的 fork，
-在官方 `main` 基础上做了一处自定义增强：**新增「天气」应用**（见下）。
+在官方 `main` 基础上做了两处自定义增强：**新增「天气」应用**、**新增 ElevenLabs TTS 供应商**（见下）。
 
 - 线上地址：https://ai-virtual-phone-weather.vercel.app
 - Vercel 项目：`ai-virtual-phone-weather`（Production Branch = `main`）
@@ -16,8 +16,13 @@
 | `components/icon-glyph.tsx` | 图标字形 `mdiWeatherPartlyCloudy` |
 | `components/desktop-shell.tsx` | `renderAppBody` 增加 `weather` 分支 |
 | `app/globals.css` | 引入 `styles/weather.css` |
+| `lib/settings-types.ts` | `VoiceApiConfig` 增加 `elevenSettings`（稳定度 / 相似度 / 风格 / 语速 / Speaker Boost / 输出格式） |
+| `lib/tts-service.ts` | 新增 `synthesizeElevenLabs`，经站内代理合成 mp3 |
+| `app/api/voice/elevenlabs-tts/route.ts` | ElevenLabs 语音合成代理（`xi-api-key`，避开浏览器 CORS，密钥不直接出网） |
+| `app/api/voice/elevenlabs-voices/route.ts` | ElevenLabs 音色列表代理（配合「拉取音色列表」按钮） |
+| `components/settings/voice-settings.tsx` | 服务商下拉新增 `ElevenLabs (11labs)`，含模型、四个滑杆、Speaker Boost 开关、输出格式 |
 
-数据源为 [Open-Meteo](https://open-meteo.com/)，**无需 API Key**；城市搜索用 Open-Meteo
+天气部分：数据源为 [Open-Meteo](https://open-meteo.com/)，**无需 API Key**；城市搜索用 Open-Meteo
 Geocoding，定位走浏览器 `navigator.geolocation`（HTTPS 下可用）。所选城市与单位保存在本地
 `localStorage`（`avp.weather.v1`）。
 
