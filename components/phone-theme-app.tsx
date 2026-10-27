@@ -7,6 +7,7 @@ import {
   Code2,
   Download,
   LayoutGrid,
+  Layers,
   PaintBucket,
   Plus,
   RotateCcw,
@@ -58,6 +59,13 @@ import {
   installThemePackageFile,
   resetThemePackageState,
 } from "@/lib/theme-package";
+import {
+  deleteThemePreset,
+  readThemePresets,
+  saveThemePreset,
+  THEME_PRESET_LIMIT,
+  type ThemePreset,
+} from "@/lib/theme-preset-storage";
 
 type ThemeSection =
   | "menu"
@@ -67,6 +75,7 @@ type ThemeSection =
   | "widgets"
   | "case"
   | "text"
+  | "presets"
   | "css";
 
 type ThemeMenuItemSection = Exclude<ThemeSection, "menu"> | "transfer" | "reset";
@@ -135,6 +144,10 @@ function IconReset() {
   return <RotateCcw size={22} strokeWidth={1.75} />;
 }
 
+function IconPresets() {
+  return <Layers size={22} strokeWidth={1.75} />;
+}
+
 const MENU_ITEMS: Array<{
   section: ThemeMenuItemSection;
   icon: () => React.JSX.Element;
@@ -152,6 +165,7 @@ const MENU_ITEMS: Array<{
   { section: "case", icon: IconCase, label: "状态栏", color: BINDING_ACCENTS.memory, glass: "status-bar" },
   { section: "text", icon: IconText, label: "文字", color: BINDING_ACCENTS.identity, glow: `color-mix(in srgb, ${BINDING_ACCENTS.identity} 35%, transparent)`, glass: "text" },
   { section: "css", icon: IconCode, label: "CSS 变量", desc: "自定义全局样式变量", color: BINDING_ACCENTS.embedding, glow: `color-mix(in srgb, ${BINDING_ACCENTS.embedding} 35%, transparent)`, glass: "css" },
+  { section: "presets", icon: IconPresets, label: "主题预设", desc: "保存与一键切换", color: BINDING_ACCENTS.preset, glow: `color-mix(in srgb, ${BINDING_ACCENTS.preset} 35%, transparent)`, glass: "presets" },
   { section: "transfer", icon: IconTransfer, label: "主题导入 / 导出", desc: "备份与迁移", color: BINDING_ACCENTS.api, glow: `color-mix(in srgb, ${BINDING_ACCENTS.api} 35%, transparent)`, glass: "theme-transfer" },
   { section: "reset", icon: IconReset, label: "恢复默认", desc: "重置外观", color: BINDING_ACCENTS.regex, glow: `color-mix(in srgb, ${BINDING_ACCENTS.regex} 30%, transparent)`, glass: "theme-reset" },
 ];
@@ -167,10 +181,11 @@ const SECTION_TITLES: Record<Exclude<ThemeSection, "menu">, string> = {
   widgets: "\u684C\u9762\u7EC4\u4EF6",
   case: "\u624B\u673A\u58F3",
   text: "\u6587\u5B57",
+  presets: "\u4E3B\u9898\u9884\u8BBE",
   css: "CSS \u53D8\u91CF",
 };
 
-const THEME_SECTIONS = new Set<string>(["menu", "palette", "wallpaper", "icons", "widgets", "case", "text", "css"]);
+const THEME_SECTIONS = new Set<string>(["menu", "palette", "wallpaper", "icons", "widgets", "case", "text", "presets", "css"]);
 
 function isThemeSection(value: string): value is ThemeSection {
   return THEME_SECTIONS.has(value);
@@ -393,13 +408,15 @@ export function PhoneThemeApp({
             <div>
               <h3 className="appearance-menu-section-title">System</h3>
               <div className="card-grid mt-2.5">
-                {MENU_ITEMS.filter(item => ["transfer", "reset"].includes(item.section)).map((item) => (
+                {MENU_ITEMS.filter(item => ["presets", "transfer", "reset"].includes(item.section)).map((item) => (
                   <button
                     key={item.section}
                     className="app-card card-card"
                     type="button"
                     onClick={() => {
-                      if (item.section === "transfer") {
+                      if (item.section === "presets") {
+                        setSection("presets");
+                      } else if (item.section === "transfer") {
                         setShowThemeTransfer(true);
                       } else {
                         setConfirmThemeReset(true);
@@ -440,6 +457,16 @@ export function PhoneThemeApp({
           <GlobalCSSPage draft={draft} onDraftChange={onDraftChange} onApply={onApply} onNotice={onNotice} />
         ) : section === "icons" ? (
           <IconSkinPage draft={draft} onDraftChange={onDraftChange} onApply={onApply} onNotice={onNotice} />
+        ) : section === "presets" ? (
+          <ThemePresetsPage
+            draft={draft}
+            onDraftChange={onDraftChange}
+            onApply={onApply}
+            onNotice={onNotice}
+            pageIcons={pageIcons}
+            widgets={widgets}
+            onDesktopThemeChange={onDesktopThemeChange}
+          />
         ) : (
           <div className="flex-1 overflow-y-auto items-start justify-center flex">
             <p className="ts-14 text-[var(--c-icon)]">{"\u300C"}{SECTION_TITLES[section]}{"\u300D\u529F\u80FD\u5F00\u53D1\u4E2D\u2026"}</p>
@@ -972,6 +999,154 @@ function GlobalCSSPage({
         <button type="button" className="ui-btn ui-btn-outline flex-1" onClick={() => setLocalCSS("")}>清除</button>
         <button type="button" className="ui-btn ui-btn-soft-action flex-1" onClick={handleApply}>应用</button>
       </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   Theme Presets Page
+   ══════════════════════════════════════════ */
+
+function ThemePresetsPage({
+  draft,
+  onDraftChange,
+  onApply,
+  onNotice,
+  pageIcons,
+  widgets,
+  onDesktopThemeChange,
+}: {
+  draft: ThemeProfile;
+  onDraftChange: (next: ThemeProfile) => void;
+  onApply: (next: ThemeProfile) => Promise<void> | void;
+  onNotice: (text: string) => void;
+  pageIcons: DesktopIconLayout;
+  widgets: WidgetInstance[];
+  onDesktopThemeChange: (next: {
+    widgets: WidgetInstance[];
+    iconLayout: DesktopIconLayout;
+    dock?: DesktopIconId[];
+    folders?: DesktopFolderMap;
+  }) => void;
+}) {
+  const [presets, setPresets] = useState<ThemePreset[]>([]);
+  const [name, setName] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ThemePreset | null>(null);
+
+  useEffect(() => {
+    setPresets(readThemePresets());
+    setName(draft.name && draft.name !== "默认主题" ? draft.name : "");
+  }, [draft.name]);
+
+  function handleSave() {
+    try {
+      const saved = saveThemePreset(name, { themeProfile: draft, iconLayout: pageIcons, widgets });
+      setPresets(readThemePresets());
+      setName(saved.name);
+      onNotice(`已保存主题预设「${saved.name}」`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "主题预设保存失败");
+    }
+  }
+
+  async function handleApply(preset: ThemePreset) {
+    if (busyId) return;
+    setBusyId(preset.id);
+    try {
+      // 壁纸库是跨预设共享的用户素材库，切换预设时不应丢掉其他已上传壁纸。
+      const next = normalizeThemeProfile({
+        ...preset.themeProfile,
+        wallpaperLibrary: Array.from(new Set([
+          ...draft.wallpaperLibrary,
+          ...preset.themeProfile.wallpaperLibrary,
+        ])),
+      });
+      onDesktopThemeChange({
+        widgets: preset.widgets,
+        iconLayout: preset.iconLayout,
+        dock: preset.dock,
+        folders: preset.folders,
+      });
+      await onApply(next);
+      onDraftChange(next);
+      onNotice(`已切换到主题预设「${preset.name}」`);
+    } catch (error) {
+      console.error(error);
+      onNotice(error instanceof Error ? error.message : "主题预设应用失败");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function handleDelete() {
+    if (!pendingDelete) return;
+    deleteThemePreset(pendingDelete.id);
+    setPresets(readThemePresets());
+    onNotice(`已删除主题预设「${pendingDelete.name}」，当前外观不受影响`);
+    setPendingDelete(null);
+  }
+
+  return (
+    <div className="theme-section-page">
+      <p className="ts-13 text-[var(--c-text)] leading-relaxed">
+        {"把现在的配色、壁纸、图标皮肤、桌面组件和桌面布局存成一套，随时一键换回来。最多 "}
+        {THEME_PRESET_LIMIT}
+        {" 套。"}
+      </p>
+      <div className="flex items-center gap-2 mt-3">
+        <input
+          className="ui-input flex-1"
+          value={name}
+          maxLength={24}
+          placeholder="给这套外观起个名字"
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") handleSave(); }}
+        />
+        <button type="button" className="ui-btn ui-btn-soft-action shrink-0" onClick={handleSave}>保存当前</button>
+      </div>
+      <div className="mt-4 flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
+        {presets.length === 0 ? (
+          <p className="ts-13 text-[var(--c-icon)] text-center py-8">还没有保存过主题预设</p>
+        ) : (
+          <div className="menu-group">
+            {presets.map((preset) => (
+              <div key={preset.id} className="menu-item">
+                <button
+                  type="button"
+                  className="flex-1 min-w-0 text-left bg-transparent border-0 p-0"
+                  onClick={() => { void handleApply(preset); }}
+                  disabled={Boolean(busyId)}
+                >
+                  <span className="menu-label block truncate">{preset.name}</span>
+                  <span className="ts-11 block truncate text-[var(--c-icon)]">
+                    {new Date(preset.updatedAt).toLocaleString("zh-CN", { hour12: false })}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-outline ts-12 shrink-0"
+                  onClick={() => setPendingDelete(preset)}
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`删除预设「${pendingDelete.name}」？`}
+          message="只会删掉这套存档，当前桌面与外观不受影响。"
+          icon={AlertCircle}
+          variant="danger"
+          confirmLabel="删除"
+          cancelLabel="取消"
+          onConfirm={handleDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }

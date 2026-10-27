@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AlertCircle, ChevronLeft, Code, Image as ImageIcon, MessageSquare, MoreHorizontal, RotateCcw, Sparkles, Trash2, UserRound } from "lucide-react";
+import { AlertCircle, BellRing, ChevronLeft, Code, Image as ImageIcon, MessageSquare, MoreHorizontal, RotateCcw, Sparkles, Trash2, UserRound } from "lucide-react";
+import { ChatGlobalSoundsDialog } from "./chat-global-sounds-dialog";
 import { PageShell } from "@/components/ui/page-shell";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { MediaPreviewOverlay } from "@/components/chat/media-preview-overlay";
@@ -145,6 +146,7 @@ function MascotInfoPanel({
     const [cssDraft, setCssDraft] = useState(settings.chatCustomCSS || "");
     const [showConfirmClearTools, setShowConfirmClearTools] = useState(false);
     const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+    const [showSounds, setShowSounds] = useState(false);
     const chat = useSyncExternalStore(subscribeMascotChat, getMascotChatSnapshot, getMascotChatSnapshot);
     const hasToolHistory = hasMascotToolHistoryMessages(chat.messages);
     const hasCustomAvatar = !!settings.avatarImage && settings.avatarImage !== DEFAULT_MASCOT_AVATAR;
@@ -264,6 +266,13 @@ function MascotInfoPanel({
                         <div className="menu-label-group"><span className="menu-label">自定义 CSS 样式</span></div>
                         <div className="menu-right">{settings.chatCustomCSS ? <span className="menu-desc mr-1">已设置</span> : null}</div>
                     </button>
+                    <button className="menu-item" onClick={() => setShowSounds(true)}>
+                        <MascotInfoIcon color="var(--c-action-blue,#246bfd)"><BellRing size={22} strokeWidth={1.75} /></MascotInfoIcon>
+                        <div className="menu-label-group">
+                            <span className="menu-label">聊天提示音</span>
+                            <span className="menu-desc">新消息 / 发送 / 来电 / 致电 / 挂断</span>
+                        </div>
+                    </button>
                 </div>
 
                 <div className="menu-group">
@@ -348,6 +357,8 @@ function MascotInfoPanel({
                     </button>
                 </div>
             </div>
+
+            {showSounds && <ChatGlobalSoundsDialog onClose={() => setShowSounds(false)} />}
 
             {editingName && (
                 <div className="modal-overlay">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useCallScreenSounds } from "@/lib/chat-sound";
 import { ChatSession, ChatMessage, loadChatMessages, pushChatMessage, getLatestCharacterStateValues } from "@/lib/chat-storage";
 import { getStatusRegionConfig, isCustomStatusRegionActive } from "@/lib/chat-status-region";
 import { generateGroupChatCompletion } from "@/lib/group-chat-engine";
@@ -70,6 +71,8 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
     const playCallAudio = iosDevice ? playAudioBlob : playAudioBlobViaMediaElement;
     const keyboardOffsetStyle = useCallKeyboardOffsetStyle();
     const [callState, setCallState] = useState<CallState>("CONNECTING");
+    // 来电铃声 / 致电等待音 / 挂断音（角色专属提示音优先于全局）
+    useCallScreenSounds({ initiator, callState, session });
     const hasConnectedRef = useRef(false);
     const [callDuration, setCallDuration] = useState(0);
     const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([]);

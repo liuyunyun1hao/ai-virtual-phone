@@ -46,6 +46,8 @@ export type ChatSession = {
     alias?: string;
     videoBackground?: string;
     voiceBackground?: string;
+    /** 角色专属聊天提示音（仅私聊；未显式设置的字段继承全局 globalChatSounds） */
+    sounds?: ChatSoundsConfig;
     isBlacklisted?: boolean;
     customCSS?: string;
     isMuted?: boolean;
@@ -270,7 +272,59 @@ export type ChatAppSettings = {
     callVibrationEnabled?: boolean; // 语音/视频来电等待接听时循环振动（默认开；iOS 网页不支持振动则无效果）
     maxToolRounds?: number; // 单条消息的工具循环轮数上限（默认 5；每轮=一次模型请求，轮内调用条数不限）
     floatingDockEnabled?: boolean; // 悬浮球贴边半隐藏收拢模式（默认关）
+    /** 全局聊天提示音（新消息/发送消息/来电/致电/挂断），角色专属配置覆盖它 */
+    globalChatSounds?: ChatSoundsConfig;
 };
+
+// ── 聊天提示音配置 ────────────────────────────────────────────────
+
+export type ChatSoundKind = "newMessage" | "sendMessage" | "incomingCall" | "outgoingCall" | "hangup";
+
+export type ChatSoundConfig = {
+    /** 是否开启该提示音 */
+    enabled?: boolean;
+    /** 音频来源："file"=用户上传的音频文件（IndexedDB 资产 id）；"url"=音频 URL */
+    sourceType?: "file" | "url";
+    /** sourceType="file" 时为资产 id；sourceType="url" 时为音频地址 */
+    value?: string;
+    /** （仅新消息音效）开启后当前正打开该聊天时，角色新消息不播放音效 */
+    muteActiveChat?: boolean;
+    /** （仅新消息音效）开启后同一角色连续多条消息只播一次音效 */
+    notifyOncePerBurst?: boolean;
+};
+
+export type ChatSoundsConfig = {
+    newMessage?: ChatSoundConfig;
+    sendMessage?: ChatSoundConfig;
+    incomingCall?: ChatSoundConfig;
+    outgoingCall?: ChatSoundConfig;
+    hangup?: ChatSoundConfig;
+};
+
+/**
+ * 提示音配置解析：私聊角色专属（单独会话 sounds）＞ 全局聊天信息（globalChatSounds）。
+ * 会话里显式设置的字段（开关 / 音频来源 / 子开关）覆盖全局，其余字段继承全局；
+ * “专属开启但没配音频”时沿用全局音频，“专属关闭”则该角色不播这个音。
+ */
+export function resolveChatSoundConfig(
+    kind: ChatSoundKind,
+    session: Pick<ChatSession, "sounds"> | null | undefined,
+): ChatSoundConfig {
+    const merged: ChatSoundConfig = { ...(loadChatAppSettings().globalChatSounds?.[kind] ?? {}) };
+    const own = session?.sounds?.[kind];
+    if (own) {
+        // 只覆盖会话里显式设置的字段；undefined（如“清除音频”后的残留键）不参与覆盖
+        for (const [key, value] of Object.entries(own)) {
+            if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
+        }
+    }
+    return merged;
+}
+
+/** 按 id 从会话缓存取会话（提示音等同步读取路径用；找不到时返回 null）。 */
+export function findChatSessionById(sessionId: string): ChatSession | null {
+    return loadChatSessions().find(s => s.id === sessionId) ?? null;
+}
 
 /** 单条消息工具循环轮数上限（默认 5，夹在 1–20 之间） */
 export function getMaxToolRounds(): number {
@@ -291,6 +345,18 @@ export const CHAT_MESSAGES_DELETED_EVENT = "chat-messages-deleted";
 export const CHAT_REQUEST_REPLY_EVENT = "chat-request-reply";
 /** 长按编辑整批回复后重建消息：携带新消息与编辑后的原文，供云同步回写。 */
 export const CHAT_RESPONSE_BATCH_REPLACED_EVENT = "chat-response-batch-replaced";
+
+let _activeChatSessionId: string | null = null;
+
+/** 告诉共享消息层当前真正显示在前台的聊天室，供未读计数 / 提示音统一判断。 */
+export function setActiveChatSessionId(sessionId: string | null): void {
+    _activeChatSessionId = sessionId;
+}
+
+/** 当前显示在前台的聊天室 id（没有打开任何聊天室时为 null）。 */
+export function getActiveChatSessionId(): string | null {
+    return _activeChatSessionId;
+}
 
 // ── Media Preview Map ─────────────────────────
 const MEDIA_PREVIEW_MAP: Record<string, string> = {

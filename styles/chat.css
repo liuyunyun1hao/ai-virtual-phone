@@ -7226,3 +7226,111 @@
   background: currentColor;
   animation: chat-stream-cursor-blink 1s steps(2, start) infinite;
 }
+
+/* ── 聊天提示音设置（全局 / 角色专属） ─────────────────────── */
+.chat-sound-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-sound-mode {
+  display: inline-flex;
+  border: 1px solid color-mix(in srgb, var(--c-border) 85%, transparent);
+  border-radius: 10px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.chat-sound-mode button {
+  border: 0;
+  background: transparent;
+  padding: 3px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--c-text);
+  cursor: pointer;
+}
+
+.chat-sound-mode button.is-active {
+  background: color-mix(in srgb, var(--c-primary) 16%, var(--c-surface));
+  color: var(--c-primary);
+  font-weight: 600;
+}
+
+.chat-sound-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 16px 12px 68px;
+}
+
+.chat-sound-editor-session {
+  padding-left: 68px;
+}
+
+.chat-sound-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-sound-file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.chat-sound-source {
+  font-size: 11px;
+  color: var(--c-icon);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-sound-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.chat-sound-or {
+  font-size: 11px;
+  color: var(--c-icon);
+  flex: 0 0 auto;
+}
+
+.chat-sound-subtoggles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--c-border) 80%, transparent);
+  padding-top: 10px;
+}
+
+.chat-sound-subtoggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-sound-subreset {
+  font-size: 11px;
+  color: var(--c-primary);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chat-sound-test-row {
+  border-top: 1px dashed color-mix(in srgb, var(--c-border) 80%, transparent);
+  padding-top: 10px;
+}

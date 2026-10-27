@@ -17,6 +17,7 @@ import { formatXiaohongshuShareForPrompt, type ChatSharePayload } from "@/lib/ch
 import { CHAT_OPEN_SESSION_EVENT, CHAT_OPEN_ADD_CONTACT_EVENT } from "@/lib/chat-notification-events";
 import { CHAT_SESSIONS_MERGED_EVENT, type ChatSessionsMergedDetail } from "@/lib/chat-session-merge";
 import { getMascotSettingsSnapshot } from "@/lib/mascot-settings";
+import { setActiveChatSessionId } from "@/lib/chat-storage";
 
 type TabKey = "messages" | "contacts" | "feeds" | "me";
 
@@ -216,6 +217,11 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
         setActiveTab("messages");
     };
 
+    // 告诉共享消息层哪个聊天室正显示在前台（提示音「实时聊天不通知」用它判断）
+    useEffect(() => {
+        setActiveChatSessionId(activeSession?.id ?? null);
+        return () => setActiveChatSessionId(null);
+    }, [activeSession?.id]);
     // Listen for CSS updates from settings panel
     useEffect(() => {
         const onCSSUpdate = () => setChatAppCSS(kvGet("chat-app-custom-css") || "");

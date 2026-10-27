@@ -44,7 +44,7 @@ import { downloadFile } from "@/lib/download-utils";
 import { getSchemes, saveScheme, deleteScheme, type CSSScheme } from "@/lib/css-scheme-storage";
 import { CustomStatusFrame } from "@/components/chat/custom-status-frame";
 import { KeyboardAutoSendDebounceItem } from "@/components/chat/keyboard-auto-send-debounce-item";
-import { ChevronRight, Image as ImageIcon, Video, Mic, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
+import { ChevronRight, BellRing, Image as ImageIcon, Video, Mic, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import { ConfirmDialog } from "@/components/ui/modal";
@@ -181,6 +181,8 @@ import {
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
 import { MessageBubble, isStandaloneHtmlPreviewContent } from "./message-bubble";
 import { ScreenEffectSettingsModal } from "./screen-effect-settings-modal";
+import { SessionChatSoundsSection } from "./session-chat-sounds";
+import { ChatGlobalSoundsDialog } from "./chat-global-sounds-dialog";
 
 type ChatSettingsPanelProps = {
     session: ChatSession;
@@ -294,6 +296,7 @@ export function ChatSettingsPanel({
     offlineHistoryBusy = false,
 }: ChatSettingsPanelProps) {
     const [backgroundImage, setBackgroundImage] = useState<string>(session.backgroundImage || "");
+    const [showSounds, setShowSounds] = useState(false);
     const [alias, setAlias] = useState<string>(session.alias || "");
     const [videoBackground, setVideoBackground] = useState<string>(session.videoBackground || "");
     const [voiceBackground, setVoiceBackground] = useState<string>(session.voiceBackground || "");
@@ -843,6 +846,14 @@ export function ChatSettingsPanel({
                         <div className="menu-label-group"><span className="menu-label">查找聊天记录</span></div>
                         <div className="menu-right"><ChevronRight size={16} /></div>
                     </button>
+                    <button className="menu-item" onClick={() => setShowSounds(true)}>
+                        <ChatInfoIcon icon={BellRing} color={BINDING_ACCENTS.preset} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">聊天提示音</span>
+                            <span className="menu-desc">新消息 / 发送 / 来电 / 致电 / 挂断，全局生效</span>
+                        </div>
+                        <div className="menu-right"><ChevronRight size={16} /></div>
+                    </button>
                     {!session.isGroup && isAgentComputerConfigured() && (
                         <button className="menu-item" onClick={() => setShowComputer(true)}>
                             <ChatInfoIcon icon={Laptop} color={BINDING_ACCENTS.memory} />
@@ -1221,6 +1232,13 @@ export function ChatSettingsPanel({
                     </label>
                 </div>
 
+                {!session.isGroup && (
+                    <>
+                        <div className="px-4 pt-3 pb-2 ts-12 font-medium text-[var(--c-text-title)] opacity-80">角色专属提示音</div>
+                        <SessionChatSoundsSection session={session} accent={BINDING_ACCENTS.voice} onUpdate={updateSession} />
+                    </>
+                )}
+
                 {/* Advanced */}
                 <div className="menu-group">
                     <KeyboardAutoSendDebounceItem sessionId={session.id} />
@@ -1472,6 +1490,7 @@ export function ChatSettingsPanel({
 
             {/* Modal: Screen Effects */}
             {showScreenEffects && <ScreenEffectSettingsModal onClose={() => setShowScreenEffects(false)} />}
+            {showSounds && <ChatGlobalSoundsDialog onClose={() => setShowSounds(false)} />}
 
             {/* Modal: Confirm Clear History */}
             {showConfirmClear && (
