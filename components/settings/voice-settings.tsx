@@ -996,7 +996,7 @@ export function VoiceSettings() {
                                                         ))}
                                                         <option value="__manual__">手动输入...</option>
                                                     </select>
-                                                    {manualModelIds[config.id] && (
+                                                    {isCustomModel(config, !!manualModelIds[config.id]) && (
                                                         <Input
                                                             type="text"
                                                             value={config.model || ""}
