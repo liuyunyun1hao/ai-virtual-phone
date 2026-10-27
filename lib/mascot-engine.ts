@@ -24,6 +24,7 @@ import {
     type LlmToolCall,
 } from "./llm-provider-adapter";
 import { sendLLMToolStreamRequest, type LLMToolRequestResult } from "./chat-engine";
+import { fetchLlmPayload } from "./llm-http";
 
 function requireMascotApiConfig() {
     const apiConfig = resolveAuxiliaryApiConfig("mascotApiConfigId");
