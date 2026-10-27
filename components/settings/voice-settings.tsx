@@ -231,6 +231,24 @@ function voiceOptionsForConfig(config: VoiceApiConfig, fetchedVoices: Record<str
     ]);
 }
 
+// 下拉里预置的模型 ID；用来判断已保存的 model 属于「列表内」还是「手动填的」
+function knownModelIds(provider: string): string[] {
+    if (provider === "OpenAI") return ["tts-1", "tts-1-hd"];
+    if (provider === "Minimax") return DEFAULT_MINIMAX_MODELS.map(model => model.id);
+    if (provider === "ElevenLabs") return ELEVENLABS_MODELS.map(model => model.id);
+    return [];
+}
+
+// 「手动输入」原本只有组件内状态，弹窗一关就丢：
+// 自定义 model 重新打开时会显示成「手动输入…」却没有输入框，看起来像没保存。
+// 所以只要 config 里存着的不是预置模型，就继续显示输入框。
+function isCustomModel(config: VoiceApiConfig, manual: boolean): boolean {
+    if (manual) return true;
+    const model = (config.model || "").trim();
+    if (!model) return false;
+    return !knownModelIds(config.provider).includes(model);
+}
+
 function normalizeVoiceConfigs(configs: VoiceApiConfig[]): VoiceApiConfig[] {
     return configs
         .filter(config => SUPPORTED_VOICE_PROVIDERS.has(config.provider))
@@ -606,8 +624,20 @@ export function VoiceSettings() {
             }
         } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : String(error);
-            setFetchError(prev => ({ ...prev, [config.id]: msg }));
-            setFetchedVoices(prev => ({ ...prev, [config.id]: [] }));
+            // ElevenLabs 的 key 可能是细粒度权限、没勾 voices_read：拉不到账户音色，
+            // 但试听/合成走的是 text_to_speech，照旧可用，所以退回预置音色并给一句人话提示。
+            const lackingVoicesRead = config.provider === "ElevenLabs"
+                && /voices_read|missing the permission|permission/i.test(msg);
+            setFetchError(prev => ({
+                ...prev,
+                [config.id]: lackingVoicesRead
+                    ? "这个 ElevenLabs Key 没有 voices_read 权限，拉不到账户音色；试听和合成都还能用，直接在下方手动填 Voice ID 即可"
+                    : msg,
+            }));
+            setFetchedVoices(prev => ({
+                ...prev,
+                [config.id]: lackingVoicesRead ? DEFAULT_ELEVENLABS_VOICES : [],
+            }));
         } finally {
             setIsFetching(prev => ({ ...prev, [config.id]: false }));
         }
@@ -792,7 +822,7 @@ export function VoiceSettings() {
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <label className="menu-desc ml-1">语音模型 (TTS Model)</label>
-                                                    {manualModelIds[config.id] ? (
+                                                    {isCustomModel(config, !!manualModelIds[config.id]) ? (
                                                         <div className="flex gap-2">
                                                             <Input
                                                                 type="text"
@@ -819,6 +849,7 @@ export function VoiceSettings() {
                                                                     setManualModelIds(prev => ({ ...prev, [config.id]: true }));
                                                                     return;
                                                                 }
+                                                                setManualModelIds(prev => ({ ...prev, [config.id]: false }));
                                                                 updateConfig(config.id, { model: e.target.value });
                                                             }}
                                                             className="ui-select"
@@ -901,7 +932,7 @@ export function VoiceSettings() {
                                                 <div className="flex flex-col gap-1">
                                                     <label className="menu-desc ml-1">语音模型 (TTS Model)</label>
                                                     <div className="flex flex-col gap-2">
-                                                        {manualModelIds[config.id] ? (
+                                                        {isCustomModel(config, !!manualModelIds[config.id]) ? (
                                                             <div className="flex gap-2">
                                                                 <Input
                                                                     type="text"
@@ -928,6 +959,7 @@ export function VoiceSettings() {
                                                                         setManualModelIds(prev => ({ ...prev, [config.id]: true }));
                                                                         return;
                                                                     }
+                                                                    setManualModelIds(prev => ({ ...prev, [config.id]: false }));
                                                                     updateConfig(config.id, { model: e.target.value });
                                                                 }}
                                                                 className="ui-select"
@@ -954,6 +986,7 @@ export function VoiceSettings() {
                                                                 setManualModelIds(prev => ({ ...prev, [config.id]: true }));
                                                                 return;
                                                             }
+                                                            setManualModelIds(prev => ({ ...prev, [config.id]: false }));
                                                             updateConfig(config.id, { model: e.target.value });
                                                         }}
                                                         className="ui-select"
@@ -971,7 +1004,7 @@ export function VoiceSettings() {
                                                             placeholder="手动输入模型 ID，例如 eleven_multilingual_v2"
                                                         />
                                                     )}
-                                                    <span className="menu-desc ml-1">回复较长时会按句子分段合成；需要更强情感可试 eleven_v3</span>
+                                                    <span className="menu-desc ml-1">回复较长时会按句子分段合成；列表里没有的模型（如 eleven_v4 / eleven_v3）在下拉里选「手动输入…」直接填 ID</span>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex items-center justify-between px-1">
@@ -1067,7 +1100,9 @@ export function VoiceSettings() {
                                             <label className="menu-desc ml-1">默认音色 (Default Voice) 或 自定义 Voice ID</label>
                                             <div className="flex flex-col gap-2">
                                                 <div className="flex gap-2">
-                                                    {manualVoiceIds[config.id] ? (
+                                                    {(manualVoiceIds[config.id]
+                                                        || ((config.defaultVoice || "").trim() !== ""
+                                                            && !voiceOptionsForConfig(config, fetchedVoices).some(v => v.id === config.defaultVoice))) ? (
                                                         <>
                                                             <Input
                                                                 type="text"
@@ -1097,6 +1132,7 @@ export function VoiceSettings() {
                                                                             setManualVoiceIds(prev => ({ ...prev, [config.id]: true }));
                                                                             return;
                                                                         }
+                                                                        setManualVoiceIds(prev => ({ ...prev, [config.id]: false }));
                                                                         updateConfig(config.id, { defaultVoice: e.target.value });
                                                                     }}
                                                                     className="ui-select flex-1"
