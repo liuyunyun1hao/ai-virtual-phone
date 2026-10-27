@@ -41,6 +41,8 @@ export function ChatPluginManager({ onBack }: { onBack: () => void }) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
     const [updateHint, setUpdateHint] = useState<{ id: string; ok: boolean; text: string } | null>(null);
     const [updating, setUpdating] = useState(false);
+    /** 安装/更新前的应用内确认弹窗（替代原生 window.confirm，详见下方说明） */
+    const [confirmDialog, setConfirmDialog] = useState<{ kind: "install" | "upgrade"; code: string; id?: string } | null>(null);
     /** 隐藏文件选择框当前服务的目标："import"（导入面板）或某个插件 id（更新） */
     const fileTargetRef = useRef<string>("import");
     const [settingsOpenId, setSettingsOpenId] = useState<string | null>(null);
@@ -79,26 +81,41 @@ export function ChatPluginManager({ onBack }: { onBack: () => void }) {
         }
     };
 
-    const handleInstall = async (code: string) => {
-        if (!window.confirm(INSTALL_WARNING)) return;
-        setInstalling(true);
+    // ── 安装/更新：用应用内模态确认替代原生 window.confirm ──
+    // 原生 confirm 在内嵌 / 沙箱化运行环境（含虚拟手机这种 WebView 式外壳）里
+    // 经常被静默拦截、甚至直接抛 SecurityError；原逻辑只有 try/finally 没有 catch，
+    // 一旦 confirm 异常就会"点了确认却毫无反馈"。改为应用内模态，并把执行体包一层
+    // catch，任何意外都显式报红，不再静默失败。
+    const openInstall = (code: string) => setConfirmDialog({ kind: "install", code });
+    const openUpdate = (id: string, code: string) => setConfirmDialog({ kind: "upgrade", code, id });
+
+    const proceedInstall = async () => {
+        const d = confirmDialog;
+        if (!d) return;
+        setConfirmDialog(null);
+        const isUpgrade = d.kind === "upgrade";
+        if (isUpgrade) setUpdating(true); else setInstalling(true);
         try {
-            const result = await installChatPluginFromCode(code);
+            const result = await installChatPluginFromCode(d.code, isUpgrade ? { expectedId: d.id } : undefined);
+            const vers = result.upgraded && result.fromVersion && result.toVersion && result.fromVersion !== result.toVersion
+                ? ` v${result.fromVersion} → v${result.toVersion}`
+                : "";
+            const okText = result.upgraded
+                ? `已升级「${result.name}」${vers}，配置与数据已保留`
+                : `已安装「${result.name}」`;
             if (result.ok) {
-                const vers = result.upgraded && result.fromVersion && result.toVersion && result.fromVersion !== result.toVersion
-                    ? ` v${result.fromVersion} → v${result.toVersion}`
-                    : "";
-                setHint({
-                    ok: true,
-                    text: result.upgraded
-                        ? `已升级「${result.name}」${vers}，配置与数据已保留`
-                        : `已安装「${result.name}」`,
-                });
+                if (isUpgrade) setUpdateHint({ id: d.id!, ok: true, text: okText });
+                else setHint({ ok: true, text: okText });
             } else {
-                setHint({ ok: false, text: result.error || "安装失败" });
+                if (isUpgrade) setUpdateHint({ id: d.id!, ok: false, text: result.error || "更新失败" });
+                else setHint({ ok: false, text: result.error || "安装失败" });
             }
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (isUpgrade) setUpdateHint({ id: d.id!, ok: false, text: msg });
+            else setHint({ ok: false, text: msg });
         } finally {
-            setInstalling(false);
+            if (isUpgrade) setUpdating(false); else setInstalling(false);
         }
     };
 
@@ -110,30 +127,9 @@ export function ChatPluginManager({ onBack }: { onBack: () => void }) {
     const handleFileChosen = async (file: File | undefined) => {
         if (!file) return;
         const text = await file.text();
-        if (fileTargetRef.current === "import") await handleInstall(text);
-        else await handleUpdate(fileTargetRef.current, text);
+        if (fileTargetRef.current === "import") openInstall(text);
+        else openUpdate(fileTargetRef.current, text);
         if (fileInputRef.current) fileInputRef.current.value = "";
-    };
-
-    /** 就地更新：同 id 覆盖安装（配置与数据保留），并校验源码 id 与本插件一致 */
-    const handleUpdate = async (id: string, code: string) => {
-        if (!code.trim()) return;
-        if (!window.confirm(INSTALL_WARNING)) return;
-        setUpdating(true);
-        try {
-            const result = await installChatPluginFromCode(code, { expectedId: id });
-            if (result.ok) {
-                const vers = result.fromVersion && result.toVersion && result.fromVersion !== result.toVersion
-                    ? ` v${result.fromVersion} → v${result.toVersion}`
-                    : "";
-                setUpdateHint({ id, ok: true, text: `已更新${vers}，配置与数据已保留` });
-                window.setTimeout(() => setUpdateHint(cur => (cur?.id === id && cur.ok ? null : cur)), 5000);
-            } else {
-                setUpdateHint({ id, ok: false, text: result.error || "更新失败" });
-            }
-        } finally {
-            setUpdating(false);
-        }
     };
 
     const handleDelete = (id: string) => {
@@ -388,6 +384,40 @@ export function ChatPluginManager({ onBack }: { onBack: () => void }) {
                     </div>
                 </div>
             </div>
+
+            {/* 安装 / 更新前确认模态：替代原生 window.confirm，避免被运行环境静默拦截 */}
+            {confirmDialog && (
+                <div
+                    onClick={() => setConfirmDialog(null)}
+                    style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ background: "var(--c-card-bg,#fff)", color: "var(--c-text,#111)", borderRadius: 16, width: "min(440px,100%)", padding: 20, boxShadow: "0 12px 40px rgba(0,0,0,.28)" }}
+                    >
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+                            <div className="menu-icon" style={iconWrap("#f59e0b")}>
+                                <AlertTriangle size={17} strokeWidth={1.8} />
+                            </div>
+                            <span style={{ fontWeight: 600, fontSize: 15 }}>安装插件前请确认</span>
+                        </div>
+                        <p style={{ margin: "0 0 16px", lineHeight: 1.6, fontSize: 13.5, color: "var(--c-text,#333)" }}>{INSTALL_WARNING}</p>
+                        <div style={{ display: "flex", gap: 10 }}>
+                            <button
+                                className="ui-btn ui-btn-ghost"
+                                style={{ flex: 1, minHeight: 40 }}
+                                onClick={() => setConfirmDialog(null)}
+                            >取消</button>
+                            <button
+                                className="ui-btn ui-btn-primary"
+                                style={{ flex: 1, minHeight: 40 }}
+                                disabled={installing || updating}
+                                onClick={() => void proceedInstall()}
+                            >{installing || updating ? "处理中…" : "确认安装"}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </PageShell>
     );
 }

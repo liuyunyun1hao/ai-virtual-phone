@@ -480,6 +480,21 @@ const MARKDOWN_COMPONENTS = {
     content: ({ node, ...props }: any) => <div className="rm-content" {...props} />
 } as any;
 
+// react-markdown v10 的 Markdown() 每次 render 都执行 createProcessor + runSync，内部没有任何缓存
+// （node_modules/react-markdown/lib/index.js），缓存责任完全在调用方。所以：
+// 1) 插件数组必须是模块级常量，不能每次 render 新建字面量；
+// 2) 用 memo 把「同一段正文」的解析结果留住 —— 气泡因为别的原因重渲染时，不再把 Markdown 重解析一遍。
+const REMARK_PLUGINS = [remarkGfm, remarkBreaks, remarkCjkFriendly];
+const REHYPE_PLUGINS = [rehypeRaw];
+
+const MemoMarkdown = memo(function MemoMarkdown({ source }: { source: string }) {
+    return (
+        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>
+            {source}
+        </ReactMarkdown>
+    );
+});
+
 function MarkdownTextContent({
     content,
     onActionSelect,
@@ -536,11 +551,7 @@ function MarkdownTextContent({
         return (
             <div className="chat-markdown hide-scrollbar break-words" ref={containerRef}>
                 {styles && <style dangerouslySetInnerHTML={{ __html: styles }} />}
-                {mdCleaned && (
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks, remarkCjkFriendly]} rehypePlugins={[rehypeRaw]} components={MARKDOWN_COMPONENTS}>
-                        {mdCleaned}
-                    </ReactMarkdown>
-                )}
+                {mdCleaned && <MemoMarkdown source={mdCleaned} />}
                 {payUrls.map((u, i) => <ScanPayCard key={`pay-${i}`} url={u} />)}
             </div>
         );
@@ -559,11 +570,7 @@ function MarkdownTextContent({
                 return (
                     <div key={`md-${i}`}>
                         {styles && <style dangerouslySetInnerHTML={{ __html: styles }} />}
-                        {mdContent && (
-                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks, remarkCjkFriendly]} rehypePlugins={[rehypeRaw]} components={MARKDOWN_COMPONENTS}>
-                                {mdContent}
-                            </ReactMarkdown>
-                        )}
+                        {mdContent && <MemoMarkdown source={mdContent} />}
                     </div>
                 );
             })}

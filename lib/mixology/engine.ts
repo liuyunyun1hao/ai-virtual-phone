@@ -11,6 +11,7 @@ import type { ApiConfig } from "../settings-types";
 import type { MixHookSection } from "./mechanism-protocol";
 import { assembleMixPrompt, MIX_DEFAULT_USER_NAME, MIX_ENCORE_CLOSE, MIX_ENCORE_OPEN, MIX_TICKET_CLOSE, MIX_TICKET_OPEN, mixNamedOpen, type MixAssembledPrompt } from "./assembler";
 import { applyMixFilterRules, extractMixBlocks, type MixExtractedBlock } from "./prose";
+import { mixCardWorldText } from "./card-freeform";
 import {
     getMixMaterial,
     getMixSession,
@@ -27,15 +28,22 @@ import {
     type MixEncoreMaterial,
     type MixFilterRule,
     type MixMaterial,
-    type MixMechanismMaterial,
-    type MixState,
     type MixMaterialKind,
+    type MixMechanismMaterial,
     type MixRecipe,
     type MixSession,
+    type MixState,
+    type MixTextMaterial,
     type MixTicketMaterial,
     type MixTurn,
     type MixTurnBlock,
 } from "./types";
+
+// 执笔抽取引擎（特调与执笔共享记忆基础设施）
+import { hotExtractFromNarrativeBody } from "../narrative-writer/extractor";
+import { getExtractionRules, getContextHierarchy, saveContextHierarchy, onTurnsDiscarded } from "../narrative-writer/storage";
+import { incrementTurnCount, markExtractionComplete } from "../narrative-writer/writer";
+import { stripBannerMarkers } from "../narrative-writer/threads";
 import {
     advanceMixState,
     buildMixConditionContext,
@@ -46,20 +54,39 @@ import {
 import { mergeHookState, type MixHook, type MixHookPayload } from "./mechanism-protocol";
 import { disposeMixSandboxes, runMixHook } from "./mechanism-runtime";
 import { disposeMixTrusted, runMixTrustedHook } from "./trusted-runtime";
+import { getApiLogs } from "../api-log-store";
 
 export const MIX_PROMPT_APP_ID = "mixology";
 const MIX_PROMPT_TAGS = ["mixology"];
 
-/** 对局用的 API 配置：全局默认接口 */
-export function resolveMixApiConfig(): ApiConfig | null {
+/** 对局用的接口来源：binding = 全局绑定里明确指定；fallback = 没指定或已失效，实际用列表第一个；none = 一个配置都没有 */
+export type MixApiSource = "binding" | "fallback" | "none";
+
+export type MixApiResolution = {
+    config: ApiConfig | null;
+    source: MixApiSource;
+};
+
+/**
+ * 对局用的 API 配置（带来源）。特调对局只读全局默认接口，角色级绑定不参与，
+ * 所以「当前模型」指示器必须显示这一份解析结果，而不是绑定面板里当前 tab 的那份。
+ */
+export function resolveMixApiResolution(): MixApiResolution {
     const binding = loadBindingConfig();
     const configs = loadApiConfigs();
     const id = binding.globalDefaults.apiConfigId;
     if (id) {
         const found = configs.find((c) => c.id === id);
-        if (found) return found;
+        if (found) return { config: found, source: "binding" };
     }
-    return configs[0] ?? null;
+    return configs[0]
+        ? { config: configs[0], source: "fallback" }
+        : { config: null, source: "none" };
+}
+
+/** 对局用的 API 配置：全局默认接口 */
+export function resolveMixApiConfig(): ApiConfig | null {
+    return resolveMixApiResolution().config;
 }
 
 /** 从方案快照装配提示词（材料从酒柜按 id 现取；角色卡被删则报错） */
@@ -529,21 +556,26 @@ async function runMixGeneration(
     // 那个剥离器在流式时会扣住尾部 64 字等括号闭合，机括的末尾标记行会整行压在里面不出来
     const llmOptions = { appId: MIX_PROMPT_APP_ID, appTags: MIX_PROMPT_TAGS, skipOutputRegex: true, skipTimestampStrip: true, signal };
     let raw: string;
-    if (onDelta) {
+    // 真实用量：流式路径直接从返回值拿；非流式/兜底路径从「底层调用大模型日志」读最近一条（该调用刚落库）
+    let turnUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+    if (onDelta && apiConfig.enableStreaming !== false) {
         let got = false;
         try {
             const streamed = await sendLLMStreamRequest(apiConfig, null, messages, [], meta, llmOptions, {
                 onDelta: (chunk) => { got = true; onDelta(chunk); },
             });
             raw = streamed.content;
+            turnUsage = streamed.usage;
         } catch (error) {
             // 一个字都没来就报错：多半是这条接口不支持 SSE（或者中间有代理把它拆了），
             // 退回一次性请求重试一遍；已经吐过字再断的话就是真出错了，照常抛出去
             if (got || (error instanceof Error && signal?.aborted)) throw error;
             raw = await sendLLMRequest(apiConfig, null, messages, [], meta, llmOptions);
+            turnUsage = getApiLogs().at(-1)?.usage;
         }
     } else {
         raw = await sendLLMRequest(apiConfig, null, messages, [], meta, llmOptions);
+        turnUsage = getApiLogs().at(-1)?.usage;
     }
     // 块对号入座：有契约的小票/尾调才是块的候选归属（纯静态小品不收块）
     const contractTickets = tickets.filter((t) => t.contract.trim());
@@ -600,6 +632,8 @@ async function runMixGeneration(
         state: nextState,
         // 这一轮结束时的机括存储：回溯/重说/撤回回到这里，不必让机括自己复位
         mechanismStore: afterHook.store,
+        // 真实用量：来自大模型 API 返回的 usage（流式从 SSE 累计 / 非流式从日志读回），用于对局内展示与后台对账
+        usage: turnUsage,
         createdAt: Date.now(),
     };
     const updated: MixSession = {
@@ -612,6 +646,90 @@ async function runMixGeneration(
         mechanismStorePrevTurn: turn.id,
     };
     saveMixSession(updated);
+    
+    // 特调异步抽取：攒批触发（每3-5轮或字数阈值）
+    // 不阻塞主线程，后台静默执行
+    const totalTurns = updated.turns.length;
+    const assistantTurns = updated.turns.filter(t => t.role === "assistant").length;
+    
+    // 检查是否需要触发抽取
+    const shouldExtract = async () => {
+        const rules = await getExtractionRules();
+        if (!rules.enableMemoryExtraction && !rules.enableEmotionExtraction) return false;
+        
+        // 条件1: 每4轮对话触发一次（3-5轮的中间值）
+        if (totalTurns % 4 === 0) return true;
+        
+        // 条件2: 新增字数超过阈值（约2000字）
+        const recentTextLength = updated.turns.slice(-4).reduce((sum, t) => sum + (t.text?.length || 0), 0);
+        if (recentTextLength >= 2000) return true;
+        
+        return false;
+    };
+    
+    setTimeout(async () => {
+        try {
+            // 递增全局轮次计数（幂等，只在有新回合时递增）
+            const turnResult = await incrementTurnCount(updated.id, updated.turns);
+            
+            if (!(await shouldExtract())) return;
+            
+            // 获取最后一轮 assistant 回复的文本
+            const lastAssistantTurn = updated.turns.filter(t => t.role === "assistant").pop();
+            if (!lastAssistantTurn?.text) return;
+            
+            // 构建完整的会话上下文
+            const recentTurns = updated.turns.slice(-8).map(t => ({
+                role: t.role,
+                text: t.text || "",
+                ticketRaw: t.ticketRaws?.[0]?.raw,
+            }));
+            
+            // 从配方中提取角色名和世界观
+            const { entries } = resolveMixRecipeMaterials(working.recipe);
+            const active = pickActiveMixMaterials(entries, buildMixConditionContext(working));
+            const character = active.character?.[0];
+            const characterName = character?.kind === "character" ? character.name : "未知角色";
+            // worldText 从角色卡中提取（不是独立材料）
+            const worldText = character?.kind === "character" ? mixCardWorldText(character) : "";
+            
+            // 热轨抽取（快速版，<3 秒）
+            // 来源带上这一条回复的消息 id：抽取是异步的，玩家若在这几秒里点了重说，
+            // 抽取器落库前会查出这条消息已经不在，卡片直接归档，不会以"生效"混进上下文。
+            await hotExtractFromNarrativeBody(
+                updated.id,
+                lastAssistantTurn.text,
+                recentTurns.map(t => t.text),
+                { 消息ID: lastAssistantTurn.id, 轮次: assistantTurns }
+            );
+            
+            // 标记抽取完成，更新 lastExtractedTurn
+            await markExtractionComplete(updated.id);
+            
+            // 验证小票状态是否正确保存
+            console.log(`[Mixology] Turn ${turnResult.currentTurn} extraction completed, state preserved:`, JSON.stringify(updated.state));
+            
+            // 检查是否需要 L2/L3 压缩（使用全局轮次计数）
+            // 量纲必须统一成"回合"：lastCompressedAt 存的是 Date.now() 时间戳，
+            // 用它减回合数会得到一个约 -1.7e12 的巨大负数，条件永远不成立。
+            const hierarchy = await getContextHierarchy(updated.id);
+            if (hierarchy) {
+                const lastCompressedTurn = Number.isFinite(hierarchy.lastCompressedTurn)
+                    ? Math.floor(hierarchy.lastCompressedTurn as number)
+                    : 0; // 旧数据没这个字段，视为从未压缩
+                const turnsSinceLastCompress = turnResult.currentTurn - lastCompressedTurn;
+
+                // 每 20 轮触发一次 L2 摘要
+                if (turnsSinceLastCompress >= 20) {
+                    // TODO: 任务 8 实现自动压缩
+                    console.log(`[Mixology] Would trigger L2 summary at turn ${turnResult.currentTurn} (${turnsSinceLastCompress} turns since last compress)`);
+                }
+            }
+        } catch (err) {
+            console.error("[Mixology] Async extraction failed:", err);
+        }
+    }, 0);
+    
     return { session: updated, turn };
 }
 
@@ -712,6 +830,48 @@ function firstMixStoreSnapshot(turns: MixTurn[]): Record<string, Record<string, 
  * 不做这一步的话，回溯三轮重打，好感度还停在被丢掉的那个未来上，
  * 机括面板里也还留着那三轮记下的东西。
  */
+/**
+ * 公开版回滚：取对局前 turnIndex+1 轮（含第 turnIndex 轮），并把 state/mechanismStore
+ * 精确退回那一刻。**不落库**——只返回一份回滚后的副本，供"分叉支线"复制成新对局用，
+ * 不会改动原对局。内部复用私有的 withRolledBackState。
+ */
+export function mixSessionRolledBackToTurn(session: MixSession, turnIndex: number): MixSession {
+    const clamped = Math.max(0, Math.min(turnIndex, session.turns.length - 1));
+    return withRolledBackState(session, session.turns.slice(0, clamped + 1));
+}
+
+/**
+ * 从父级第 forkTurnIndex 轮分叉出一条新支线（新建一份对局）。
+ * 整段复制父级 turns[0..forkTurnIndex] 作为起点，state/mechanismStore 退回那一刻，
+ * 之后新对局独立续写、不改动父级。返回新建的对局。
+ *
+ * opts.branchName / branchNote 由调用方在分叉弹层里收集，写进新对局方便一眼区分与回退。
+ */
+export function forkMixSession(
+    parentId: string,
+    forkTurnIndex: number,
+    opts: { branchName?: string; branchNote?: string } = {},
+): MixSession {
+    const parent = getMixSession(parentId);
+    if (!parent) throw new ChatEngineError("父级对局不存在。");
+    const sliced = mixSessionRolledBackToTurn(parent, forkTurnIndex);
+    const child: MixSession = {
+        ...sliced,
+        id: createMixId("mixsess"),
+        name: undefined,
+        rootId: parent.rootId ?? parent.id,
+        parentId: parent.id,
+        forkTurnIndex,
+        depth: (parent.depth ?? 0) + 1,
+        branchName: opts.branchName?.trim() || undefined,
+        branchNote: opts.branchNote?.trim() || undefined,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    };
+    saveMixSession(child);
+    return child;
+}
+
 function withRolledBackState(session: MixSession, turns: MixTurn[]): MixSession {
     const initial = initialMixState(sessionTickets(session));
     // 记住的值全删光退回开局初值。机括存储：目标轮次之内有快照就精确退回；
@@ -737,6 +897,8 @@ export async function rerollMixReply(sessionId: string, signal?: AbortSignal, on
     }
     const trimmedSession = withRolledBackState(current, current.turns.slice(0, -1));
     saveMixSession(trimmedSession);
+    // 这条回复作废了。它抽出的记忆卡/情感卡不删——归档，写明为什么。
+    onTurnsDiscarded(sessionId, [last.id], "来源回复已被丢弃（重说）");
     const beforeLast = trimmedSession.turns[trimmedSession.turns.length - 1];
     // 上一条也是 assistant（继续产生的），补一个不落库的推进指令避免连续 assistant 消息
     const nudge = beforeLast?.role === "assistant"
@@ -791,6 +953,8 @@ export function truncateMixAfterTurn(sessionId: string, turnId: string): MixSess
     if (idx < 0) throw new ChatEngineError("消息不存在。");
     const updated = withRolledBackState(current, current.turns.slice(0, idx + 1));
     saveMixSession(updated);
+    // 回溯掉的那段历史里没有一条消息还活着，它们抽出的卡全部归档
+    onTurnsDiscarded(sessionId, current.turns.slice(idx + 1).map((t) => t.id), "来源回复已被丢弃（回溯）");
     return updated;
 }
 
@@ -896,6 +1060,16 @@ export function editMixTurn(sessionId: string, turnId: string, newText: string):
     const later = canReplayMixFrom(current, idx) ? current.turns.slice(idx + 1) : [];
     const updated = withRolledBackState(current, [...kept, edited, ...later]);
     saveMixSession(updated);
+    // 重画不了、被截掉的那些轮次同样作废了。可回放时 later 非空、一条没丢，这里就是空数组，
+    // 不该也不会归档任何东西。
+    // （被编辑的这一条本身 id 不变，它的旧卡继续挂在同一条消息上——已知限制，见 MANUAL_CHECKLIST）
+    if (later.length === 0) {
+        onTurnsDiscarded(
+            sessionId,
+            current.turns.slice(idx + 1).map((t) => t.id),
+            "来源回复已被丢弃（编辑后无法重画，已截断）"
+        );
+    }
     return updated;
 }
 
@@ -1081,5 +1255,135 @@ export function undoMixLastRound(sessionId: string): MixSession {
     if (lastUserIdx < 0) throw new ChatEngineError("还没有可以撤回的发言。");
     const updated = withRolledBackState(current, current.turns.slice(0, lastUserIdx));
     saveMixSession(updated);
+    // 撤回掉的那一轮连同它的回复一起没了，回复抽出的卡归档
+    onTurnsDiscarded(
+        sessionId,
+        current.turns.slice(lastUserIdx).map((t) => t.id),
+        "来源回复已被丢弃（撤回）"
+    );
+    return updated;
+}
+
+/**
+ * 将执笔生成的正文作为 assistant turn 插入到对局中。
+ * 用于执笔插件：不经过 LLM 调用，直接将已生成的剧情写入聊天流。
+ */
+/**
+ * 插入执笔生成的剧情轮次（走完整特调流程）
+ * 
+ * 与直接插入 turn 不同，此函数会：
+ * 1. 装配提示词（包含小票契约）
+ * 2. 执行机括钩子（afterReply）
+ * 3. 更新 state（advanceMixStateWithBlocks）
+ * 4. 保存 session 并广播事件
+ */
+export async function insertNarrativeTurn(sessionId: string, narrativeBody: string, banner?: string): Promise<MixSession> {
+    const current = getMixSession(sessionId);
+    if (!current) throw new ChatEngineError("对局不存在。");
+    
+    const trimmed = narrativeBody.trim();
+    if (!trimmed) throw new ChatEngineError("正文内容为空。");
+
+    // 报幕里的机器标记（[推进:…] / [回收:…]）绝不能进对局文本。
+    // 调用方（执笔面板）本来就该剥掉再传；这里是最后一道兜底：
+    // 漏传一次也不要在聊天记录里留下玩家看不懂的方括号。
+    const 干净报幕 = banner ? stripBannerMarkers(banner) : undefined;
+
+    // 如果有报幕，将其作为元数据嵌入到 rawText 中
+    const rawText = 干净报幕 ? `[执笔报幕] ${干净报幕}\n\n${trimmed}` : undefined;
+    
+    // 从配方中提取当前激活的材料（用于装配提示词和执行机括）
+    const { entries } = resolveMixRecipeMaterials(current.recipe);
+    const active = pickActiveMixMaterials(entries, buildMixConditionContext(current));
+    const character = active.character?.[0];
+    
+    // 装配提示词（包含小票契约）
+    const assembled = assembleMixPrompt({
+        character: character as any,
+        materials: active,
+        userName: current.userName,
+        openingIndex: current.openingIndex,
+        state: current.state,
+    });
+    
+    // 构建初始 turn（尚未执行机括）
+    const initialTurn: MixTurn = {
+        id: createMixId("mixturn"),
+        role: "assistant",
+        text: trimmed,
+        rawText,
+        createdAt: Date.now(),
+    };
+    
+    // 执行机括钩子（afterReply）- 让机括有机会修改正文和 state
+    const afterHook = await runMechanismHooks(
+        current,
+        "afterReply",
+        {
+            text: trimmed,
+            ticketRaws: undefined, // 执笔模式不生成小票块，但机括仍可访问契约
+            encoreRaws: undefined,
+        },
+        [], // 暂无 rosters
+    );
+    
+    // 合并最终文本和 state
+    const finalText = typeof afterHook.text === "string" ? afterHook.text : trimmed;
+    const nextState = mergeHookState(current.state ?? {}, afterHook.state);
+    
+    // 构建完整的 turn
+    const turn: MixTurn = {
+        ...initialTurn,
+        text: finalText,
+        state: nextState,
+        mechanismStore: afterHook.store,
+    };
+    
+    const updated: MixSession = {
+        ...current,
+        turns: [...current.turns, turn],
+        state: nextState,
+        mechanismStore: afterHook.store,
+        updatedAt: Date.now(),
+    };
+    
+    saveMixSession(updated);
+    
+    // 广播 session 更新事件，通知正在运行的对局页面刷新
+    if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("mix-session-updated", { detail: { sessionId } }));
+    }
+    
+    // 执笔落库后异步触发记忆抽取（不阻塞返回）：
+    // 执笔正文不走 runMixGeneration 的攒批阈值，这里每轮都抽；
+    // 只读 updated，不写 session state（规范：异步抽取不得覆盖小票状态）
+    setTimeout(async () => {
+        try {
+            const rules = await getExtractionRules();
+            if (!rules.enableMemoryExtraction && !rules.enableEmotionExtraction) return;
+            
+            const recentTurns = updated.turns.slice(-8).map(t => ({
+                role: t.role,
+                text: t.text || "",
+                ticketRaw: t.ticketRaws?.[0]?.raw,
+            }));
+            
+            // 热轨抽取（快速版，<3 秒）
+            // 执笔正文已经作为 turn 落库了，消息 id 现成，来源照传：
+            // 之后回溯/重说把这条正文丢掉时，它抽出的卡同样会被归档。
+            await hotExtractFromNarrativeBody(
+                sessionId,
+                finalText,
+                recentTurns.map(t => t.text),
+                {
+                    消息ID: turn.id,
+                    轮次: updated.turns.filter(t => t.role === "assistant").length,
+                }
+            );
+        } catch (err) {
+            console.error("[Mixology] Narrative-turn extraction failed:", err);
+        }
+    }, 0);
+    
     return updated;
 }

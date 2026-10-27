@@ -29,6 +29,10 @@ import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 import { Select, Toggle } from "@/components/ui/form";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { CloudUpload } from "lucide-react";
+import { LegacyMigrationDialog } from "@/components/narrative-writer/legacy-migration-dialog";
+import { getMigrationState, hasLegacyNarrativeData } from "@/lib/narrative-writer/storage";
+import { loadMixSessions } from "@/lib/mixology/storage";
+import { mixSessionTitle } from "@/lib/mixology/types";
 import {
   DEFAULT_CLOUD_BACKUP_CONFIG,
   isCloudBackupConfigured,
@@ -100,6 +104,7 @@ const MODULE_ICONS: Record<DataModuleId, LucideIcon> = {
   apps: Smartphone,
   resource_hub: Store,
   creative: Sparkles,
+  narrative: Database,
   cache: Archive,
 };
 
@@ -113,6 +118,7 @@ const MODULE_ACCENTS: Record<DataModuleId, string> = {
   apps: CONTENT_APP_ACCENTS.calendar,
   resource_hub: CONTENT_APP_ACCENTS.shopping,
   creative: CONTENT_APP_ACCENTS.story,
+  narrative: BINDING_ACCENTS.memory,
   cache: BINDING_ACCENTS.regex,
 };
 
@@ -308,6 +314,20 @@ export function DataManagement({ onNotice }: DataManagementProps) {
   const [spaceScanDetail, setSpaceScanDetail] = useState<string | null>(null);
   const [spaceClearPending, setSpaceClearPending] = useState<StorageCategoryStat | null>(null);
   const [spaceClearRange, setSpaceClearRange] = useState<number>(30);
+
+  // 执笔旧记忆归属迁移（任务 #20 在设置里保留的同一入口）
+  const [narrativeMigrationOpen, setNarrativeMigrationOpen] = useState(false);
+  const [narrativeLegacyPending, setNarrativeLegacyPending] = useState(false);
+  const refreshNarrativeLegacy = async () => {
+    try {
+      const has = await hasLegacyNarrativeData();
+      const st = await getMigrationState();
+      setNarrativeLegacyPending(has && st?.status !== "done");
+    } catch (error) {
+      console.error("[DataManagement] 检查执笔旧记忆归属失败:", error);
+    }
+  };
+  useEffect(() => { void refreshNarrativeLegacy(); }, []);
 
   useEffect(() => {
     setCloudConfig(loadCloudBackupConfig());
@@ -632,6 +652,20 @@ export function DataManagement({ onNotice }: DataManagementProps) {
       </div>
 
       <div className="data-section">
+        <DataSectionTitle>执笔旧记忆归属</DataSectionTitle>
+        <div className="menu-group">
+          <div className="menu-item">
+            <DataSettingsIcon icon={Brain} color={BINDING_ACCENTS.memory} />
+            <div className="menu-label-group">
+              <span className="menu-label">升级前的旧记忆</span>
+              <span className="menu-desc">{narrativeLegacyPending ? "有旧记忆尚未归属到任何对局，可在此选择它们属于哪场聊天。" : "没有待归属的旧记忆。"}</span>
+            </div>
+            <button type="button" className="ui-btn ui-btn-outline" disabled={!narrativeLegacyPending} onClick={() => setNarrativeMigrationOpen(true)}>归属迁移</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="data-section">
         <DataSectionTitle>Local Protection</DataSectionTitle>
         <div className="menu-group">
           <div className="menu-item data-readonly-item">
@@ -777,6 +811,11 @@ export function DataManagement({ onNotice }: DataManagementProps) {
               ariaLabel="选择导出模块"
             />
           </div>
+          {selectedExportModules.includes("creative") && !selectedExportModules.includes("narrative") ? (
+            <div className="data-cloud-status" role="note">
+              特调会话的记忆存在「执笔记忆」模块里，本备份没勾它——请一起勾选，否则恢复后会话在、记忆却是空的。
+            </div>
+          ) : null}
           <div className="data-menu-actions">
             <button type="button" className={`ui-btn ui-btn-primary ${busy === "导出中" ? "is-busy" : ""}`} onClick={() => handleExport(selectedExportModules)} disabled={Boolean(busy)}>
               {busy === "导出中" ? <><Loader2 size={16} className="animate-spin" /> 导出中…</> : <><Download size={16} /> 导出备份</>}
@@ -979,7 +1018,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
                   ))}
                 </div>
               ) : (
-                <p className="menu-desc">该类别将整体清理。建议先做一次备份。</p>
+                <p className="menu-desc">该类别将整体清理。不会自动备份，删除后无法恢复，请先手动导出备份。</p>
               )}
             </div>
             <div className="modal-footer" data-ui="modal-footer" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1087,7 +1126,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
             <DataSettingsIcon icon={Trash2} color="#E5484D" />
             <div className="menu-label-group">
               <span className="menu-label">清理模块</span>
-              <span className="menu-desc">已选择 {selectedClearModules.length} / {DATA_MODULES.length} 个模块，清理前会先尝试备份</span>
+              <span className="menu-desc">已选择 {selectedClearModules.length} / {DATA_MODULES.length} 个模块，不会自动备份，删除后无法恢复，请先手动导出备份</span>
             </div>
             <div className="menu-right data-inline-actions">
               <button type="button" className="ui-btn ui-btn-outline py-1 px-3 ts-12" onClick={() => setSelectedClearModules([])}>
@@ -1135,7 +1174,7 @@ export function DataManagement({ onNotice }: DataManagementProps) {
                   ? "将按规则压缩/清理过期动态媒体：4 天以上压缩图片，7 天以上清理聊天图片、朋友圈/小红书真实图和本地音乐，并清理确定无引用的旧主题素材。壁纸、图标、dock、字体等仍在引用的常驻资源不会删除。是否继续？"
                   : confirmRequest.type === "orphan-theme"
                     ? "将扫描当前仍被引用的主题素材，只删除确定无引用的旧图片、旧字体、旧 dock、旧图标皮肤等素材。是否继续？"
-                    : `清理 ${confirmRequest.labels} 会删除对应数据。建议先备份。是否继续？`
+                    : `清理 ${confirmRequest.labels} 会删除对应数据。${confirmRequest.moduleIds.includes("narrative") ? "此操作会删除所有聊天的记忆卡、情感卡、剧情状态，以及尚未迁移的旧版记忆及其备份，无法恢复。" : "不会自动备份，删除后无法恢复，请先手动导出备份。"}${confirmRequest.moduleIds.includes("creative") && !confirmRequest.moduleIds.includes("narrative") ? "特调对局会话将被删除，但其执笔记忆不会同时删除；如需一并清除，请同时勾选「执笔记忆」。" : ""}是否继续？`
           }
           icon={confirmRequest.type === "export" ? Download : confirmRequest.type === "import" ? Upload : confirmRequest.type === "media-maintenance" ? Archive : AlertTriangle}
           variant={confirmRequest.type === "clear" || confirmRequest.type === "media-maintenance" || confirmRequest.type === "orphan-theme" || (confirmRequest.type === "import" && confirmRequest.overwrite) ? "danger" : "action"}
@@ -1188,6 +1227,14 @@ export function DataManagement({ onNotice }: DataManagementProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {narrativeMigrationOpen && (
+        <LegacyMigrationDialog
+          sessions={loadMixSessions().map((s) => ({ id: s.id, title: mixSessionTitle(s) }))}
+          onMigrated={() => { onNotice?.("旧记忆已归属完成。"); }}
+          onDeferred={() => { setNarrativeMigrationOpen(false); void refreshNarrativeLegacy(); }}
+        />
       )}
     </div>
   );
