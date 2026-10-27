@@ -70,9 +70,9 @@ export const PAGE_2_DEFAULT: IconId[] = [
 ];
 
 // 第三页默认图标：右半边 2×2 排布（左半边留给日历组件），位置见 createDefaultDesktopIconLayout
-export const PAGE_3_DEFAULT: IconId[] = ["worldbuilder", "qa", "resource_hub", "realitybridge", "mixology"];
+export const PAGE_3_DEFAULT: IconId[] = ["worldbuilder", "qa", "resource_hub", "realitybridge", "mixology", "weather"];
 
-export const DOCK_DEFAULT: IconId[] = ["settings", "theme", "resources", "characters", "weather"];
+export const DOCK_DEFAULT: IconId[] = ["settings", "theme", "resources", "characters"];
 
 export const ICONS: Record<IconId, IconMeta> = {
   chat: { id: "chat", label: "\u804a\u5929", tone: "var(--c-icon-green)", placeholder: false },

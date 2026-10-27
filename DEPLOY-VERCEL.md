@@ -12,7 +12,7 @@
 | --- | --- |
 | `components/weather/weather-app.tsx` | 天气应用（当前天气 / 24 小时 / 7 天预报 / 城市搜索 / 定位 / °C·°F） |
 | `styles/weather.css` | 天气应用样式（晴雨雪雾雷 + 昼夜自动换天空配色） |
-| `lib/desktop-config.ts` | 新增 `weather` 图标定义，并加入 `DOCK_DEFAULT`（Dock 第 5 个图标） |
+| `lib/desktop-config.ts` | 新增 `weather` 图标定义，并加入 `PAGE_3_DEFAULT`（第 3 页第 6 个图标，前排右格） |
 | `components/icon-glyph.tsx` | 图标字形 `mdiWeatherPartlyCloudy` |
 | `components/desktop-shell.tsx` | `renderAppBody` 增加 `weather` 分支 |
 | `app/globals.css` | 引入 `styles/weather.css` |
