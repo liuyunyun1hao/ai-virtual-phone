@@ -12,6 +12,7 @@ type Status = "checking" | "online" | "offline";
 export function XinchaoApp({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<Status>("checking");
   const [attempts, setAttempts] = useState(0);
+  const [reloadKey, setReloadKey] = useState(0);
   const aliveRef = useRef(true);
 
   const ping = useCallback(async () => {
@@ -58,11 +59,31 @@ export function XinchaoApp({ onClose }: { onClose: () => void }) {
     return (
       <div className="xinchao-app">
         <iframe
+          key={reloadKey}
           className="xinchao-frame"
           src={DASHBOARD_URL}
           title="心潮 · 此刻"
           allow="clipboard-read; clipboard-write"
         />
+        <div className="xinchao-toolbar">
+          <button type="button" className="xinchao-tool xinchao-tool-back" onClick={onClose} aria-label="返回桌面">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+            <span>桌面</span>
+          </button>
+          <button
+            type="button"
+            className="xinchao-tool"
+            onClick={() => setReloadKey((n) => n + 1)}
+            aria-label="刷新看板"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-3.2-6.9" />
+              <polyline points="21 3 21 9 15 9" />
+            </svg>
+          </button>
+        </div>
       </div>
     );
   }
