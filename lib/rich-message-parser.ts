@@ -593,10 +593,20 @@ function parseSegment(segment: string, parts: ParsedMessagePart[]) {
 
 // ── Main parser ──────────────────────────────────────────
 
+
+/** 宽容化：模型偶尔用全角方括号/中文书名号写语音条指令，这里统一回半角，
+ *  否则解析不到、整条会原样显示成文字。只处理已知指令名，不碰其它【】用法。 */
+function normalizeDirectiveBrackets(text: string): string {
+    return text
+        .replace(/【\s*(语音条)\s*([：:])\s*([^】\n]*)】/g, "[$1:$3]")
+        .replace(/［\s*(语音条)\s*([：:])\s*([^］\n]*)］/g, "[$1:$3]")
+        .replace(/\[\s*(语音条)\s*[：]\s*([^\]\n]*)\]/g, "[语音条:$2]");
+}
+
 export function parseAIResponse(rawText: string, previousState: StateValue[]): ParsedAIResponse {
     // 0. FIRST: extract ```html blocks and <style>+HTML before any processing
     const htmlBlockPlaceholders: { placeholder: string; original: string }[] = [];
-    let protected_ = rawText;
+    let protected_ = normalizeDirectiveBrackets(rawText);
     // Protect ```html...``` blocks
     protected_ = protected_.replace(/```html\s*\n[\s\S]*?```/g, (match) => {
         const placeholder = `\x00HTML_BLOCK_${htmlBlockPlaceholders.length}\x00`;
