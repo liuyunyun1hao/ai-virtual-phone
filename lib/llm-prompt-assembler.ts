@@ -2,7 +2,7 @@
 
 import { Character } from "./character-types";
 import { ChatMessage } from "./chat-storage";
-import { VOICE_FORMAT_RULE } from "./voice-tags";
+import { buildOutputFormatRule } from "./output-format-rules";
 import type { StateValue } from "./chat-storage";
 import { PresetConfig, Prompt, PromptOrderEntry, WorldBookConfig, RegexConfig, WorldBookEntry } from "./settings-types";
 import type { UserIdentity } from "@/components/settings/user-identity";
@@ -606,16 +606,17 @@ function isWBAtDepthPosition(entry: WorldBookEntry): boolean {
  * 预设里没有的东西一律不注入——不存在人设/世界书/记忆的硬编码兜底。
  */
 
-/** 在系统提示词末尾追加语音条格式硬约束（仅在已经启用语音条指令时）。
+/** 在系统提示词末尾追加「输出格式硬约束」，按提示词里实际出现的指令动态生成。
  *  放在最后是因为模型对最近的指令最敏感，格式类约束压在结尾更稳。 */
-function reinforceVoiceFormat(payload: LLMMessage[]): LLMMessage[] {
+function reinforceOutputFormat(payload: LLMMessage[]): LLMMessage[] {
     for (let i = payload.length - 1; i >= 0; i -= 1) {
         if (payload[i].role !== "system") continue;
         const content = payload[i].content;
         if (typeof content !== "string") return payload;
-        if (!content.includes("[语音条")) return payload;
-        if (content.includes("【语音条格式 · 硬约束】")) return payload;
-        payload[i] = { ...payload[i], content: content + "\n" + VOICE_FORMAT_RULE };
+        if (content.includes("【输出格式 · 硬约束】")) return payload;
+        const rule = buildOutputFormatRule(content);
+        if (!rule) return payload;
+        payload[i] = { ...payload[i], content: content + rule };
         return payload;
     }
     return payload;
@@ -1141,7 +1142,7 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
         }
     }
 
-    return reinforceVoiceFormat(finalPayload);
+    return reinforceOutputFormat(finalPayload);
 }
 
 
@@ -2301,7 +2302,7 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
         }
     }
 
-    return reinforceVoiceFormat(finalPayload);
+    return reinforceOutputFormat(finalPayload);
 }
 
 

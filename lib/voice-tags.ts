@@ -33,15 +33,3 @@ export function stripVoiceTags(text: string | undefined | null): string {
 export function voiceTagsSupportedByProvider(provider: string | undefined): boolean {
   return provider === "ElevenLabs";
 }
-
-
-/** 追加到系统提示词末尾的硬约束。模型最容易在括号种类、全角冒号、
- *  括号嵌套三处写错，写错了整条语音条会退化成乱码文字。 */
-export const VOICE_FORMAT_RULE = [
-    "\n【语音条格式 · 硬约束】",
-    "1. 只允许半角方括号 + 半角冒号：`[语音条:内容]`，冒号前后不要换行。",
-    "2. 内容里的语气标注也只能用半角方括号，紧跟在内容里：`[语音条:[贴近麦克风, 气声]你今天…怎么才回我。]`。",
-    "3. 禁止用【】、［］、（）、“”、<> 包裹；禁止写成「语音条：」或 [语音条]…[/语音条]；方括号里不许再套方括号（语气标注除外）。",
-    "4. 一条语音只写一条 [语音条:...]，不要把它写进 [内心] 或旁白里。",
-    "格式写错时这条消息会原样显示成文字、用户听不到语音——宁可不用语音条，也不要写错格式。",
-].join("\n");
