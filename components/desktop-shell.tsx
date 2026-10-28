@@ -40,6 +40,7 @@ import { GameHubApp } from "@/components/game/game-hub-app";
 import { MixologyApp } from "@/components/mixology/mixology-app";
 import InterviewMagazineApp from "@/components/interview/interview-magazine-app";
 import { WeatherApp } from "@/components/weather/weather-app";
+import { XinchaoApp } from "@/components/xinchao/xinchao-app";
 import { CoCreateApp } from "@/components/cocreate/cocreate-app";
 import { AppMarketApp } from "@/components/app-market/app-market-app";
 import { CustomAppRunner } from "@/components/app-market/custom-app-runner";
@@ -1922,6 +1923,27 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
       window.removeEventListener("incoming-call-dismiss", onDismiss);
     };
   }, []);
+
+  // 老用户一次性补「心潮」图标：新版本新增的内置应用不会自动出现在已保存的布局里。
+  // 用 localStorage 标记只补一次——她删掉之后不会自己长回来。
+  useEffect(() => {
+    if (!desktopReady) return;
+    const FLAG = "ai_phone_xinchao_icon_v1";
+    try {
+      if (localStorage.getItem(FLAG) === "1") return;
+      localStorage.setItem(FLAG, "1");
+    } catch {
+      return;
+    }
+    setLayout((prev) => {
+      const present = Object.values(prev).some((items) => (items as IconPosition[] | undefined)?.some((ic) => ic.id === "xinchao"));
+      if (present) return prev;
+      const next = JSON.parse(JSON.stringify(prev)) as DesktopLayout;
+      placeIconOnAvailablePage(next, widgetsRef.current, { id: "xinchao", row: 1, col: 1 }, 1);
+      kvSet(ICON_LAYOUT_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [desktopReady]);
 
   // ── 离线来电（AI 在离线消息里输出【拨打电话】）──
   // 三个入口汇到同一处：SW 转发的来电推送、通知点击冷启动的 ?ring= 参数、
@@ -4097,6 +4119,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
     if (activeApp === "weather") {
       return <WeatherApp onClose={() => setActiveApp(null)} />;
+    }
+
+    if (activeApp === "xinchao") {
+      return <XinchaoApp onClose={() => setActiveApp(null)} />;
     }
 
     if (activeApp === "shopping") {

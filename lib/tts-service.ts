@@ -2,6 +2,7 @@
 
 import type { VoiceApiConfig, ContentAppId } from "./settings-types";
 import { loadVoiceConfigs, loadBindingConfig, resolveBinding } from "./settings-storage";
+import { stripVoiceTags, voiceTagsSupportedByProvider } from "./voice-tags";
 
 export type VoiceApiConfigResolved = VoiceApiConfig;
 
@@ -35,17 +36,21 @@ export async function synthesizeSpeech(
     if (!text.trim()) return null;
 
     const provider = voiceConfig.provider;
+    // [轻声吸气] 这类方括号标注只给支持音频标签的 ElevenLabs 用。
+    // 其它引擎会把标注当正文逐字读出来，所以先剥掉再送合成。
+    const speechText = voiceTagsSupportedByProvider(provider) ? text : stripVoiceTags(text);
+    if (!speechText.trim()) return null;
 
     if (provider === "Minimax") {
-        return synthesizeMinimax(text, voiceConfig, options?.emotion);
+        return synthesizeMinimax(speechText, voiceConfig, options?.emotion);
     }
 
     if (provider === "OpenAI") {
-        return synthesizeOpenAI(text, voiceConfig);
+        return synthesizeOpenAI(speechText, voiceConfig);
     }
 
     if (provider === "ElevenLabs") {
-        return synthesizeElevenLabs(text, voiceConfig);
+        return synthesizeElevenLabs(speechText, voiceConfig);
     }
 
     return null;

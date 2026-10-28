@@ -12,6 +12,7 @@ import { ContactCardGenerateFlow } from "@/components/chat/contact-card-generate
 import { MediaPreviewOverlay } from "@/components/chat/media-preview-overlay";
 import { findStickerByName } from "@/lib/sticker-data";
 import { splitBilingualText } from "@/lib/bilingual-text";
+import { stripVoiceTags } from "@/lib/voice-tags";
 import { isInvisibleOrWhitespaceOnly } from "@/lib/rich-message-parser";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -2297,9 +2298,11 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
     const text = msg.mediaData?.label || "语音消息";
     const bilingual = splitBilingualText(text);
     const speechText = bilingual?.original || text;
+    // 时长按「去掉 [吸氣] 标注后的正文」估算，否则标签会把语音条撑得虚长。
+    const spokenChars = stripVoiceTags(speechText).length || speechText.length;
     const synthesizedFromText = msg.mediaData?.synthesizedFromText;
     const needsResynthesis = msg.role !== "user" && synthesizedFromText !== speechText;
-    const duration = msg.mediaData?.voiceDuration || Math.max(2, Math.ceil(speechText.length / 4));
+    const duration = msg.mediaData?.voiceDuration || Math.max(2, Math.ceil(spokenChars / 4));
 
     const playSrc = (src: string) => {
         // 必须用 <audio> 元素:iOS 静音拨键会掐掉 Web Audio 的输出(表现为全线

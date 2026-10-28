@@ -1,0 +1,121 @@
+/* 心潮 · 此刻：内嵌本机看板 */
+.xinchao-app{
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  width:100%;
+  height:100%;
+  min-height:0;
+  background:#120a11;
+  overflow:hidden;
+}
+
+.xinchao-frame{
+  flex:1;
+  width:100%;
+  height:100%;
+  border:0;
+  background:#120a11;
+  display:block;
+}
+
+.xinchao-state{
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  padding:28px 26px;
+  text-align:center;
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(255,111,159,.16), transparent 70%),
+    #120a11;
+  color:#f5eef2;
+}
+
+.xinchao-close{
+  position:absolute;
+  top:14px;
+  right:14px;
+  width:30px;
+  height:30px;
+  border:0;
+  border-radius:50%;
+  background:rgba(255,255,255,.08);
+  color:rgba(255,255,255,.62);
+  font-size:13px;
+  cursor:pointer;
+}
+
+.xinchao-orb{
+  width:54px;
+  height:54px;
+  border-radius:50%;
+  border:1px solid rgba(255,111,159,.55);
+  background:radial-gradient(circle at 50% 42%, rgba(255,111,159,.34), rgba(255,111,159,.05) 68%);
+  box-shadow:0 0 26px rgba(255,111,159,.22);
+}
+.xinchao-orb[data-state="checking"]{
+  animation:xc-breathe 1.6s ease-in-out infinite;
+}
+@keyframes xc-breathe{
+  0%,100%{transform:scale(.94);opacity:.72}
+  50%{transform:scale(1.02);opacity:1}
+}
+
+.xinchao-state h2{
+  margin:6px 0 0;
+  font-size:16px;
+  font-weight:560;
+  letter-spacing:.02em;
+}
+
+.xinchao-hint{
+  max-width:24em;
+  margin:0;
+  font-size:11.5px;
+  line-height:1.75;
+  color:rgba(245,238,242,.56);
+}
+.xinchao-hint code{
+  display:block;
+  margin:8px auto 0;
+  padding:7px 10px;
+  border-radius:8px;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.08);
+  color:rgba(255,214,228,.9);
+  font-size:10.5px;
+  white-space:nowrap;
+  overflow-x:auto;
+}
+
+.xinchao-actions{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  margin-top:8px;
+}
+
+.xinchao-btn{
+  border:0;
+  border-radius:999px;
+  padding:9px 20px;
+  background:linear-gradient(180deg, rgba(255,111,159,.95), rgba(232,86,132,.95));
+  color:#ffffff;
+  font-size:12px;
+  font-weight:560;
+  cursor:pointer;
+}
+.xinchao-btn:active{transform:scale(.97)}
+
+.xinchao-link{
+  font-size:11.5px;
+  color:rgba(255,214,228,.78);
+  text-decoration:none;
+  border-bottom:1px solid rgba(255,214,228,.28);
+}
+
+.xinchao-attempts{
+  margin:4px 0 0;
+  font-size:10px;
+  color:rgba(245,238,242,.34);
+}

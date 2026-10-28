@@ -3,6 +3,7 @@
 import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChatSession, ChatMessage, CHAT_APP_SETTINGS_UPDATED_EVENT, CHAT_INITIAL_VISIBLE_MESSAGE_COUNT, CHAT_LOAD_MORE_MESSAGE_COUNT, CHAT_REQUEST_REPLY_EVENT, loadChatAppSettings, loadChatMessages, loadChatContacts, loadChatSessions, saveChatSessions, pushChatMessage, updateChatMessage, deleteChatMessage, deleteChatMessagesFrom, deleteChatMessagesByIds, retractChatMessage, editChatMessage, updateMessageMediaData, replaceResponseBatchWithParts, replaceGroupResponseRound, isReadingDiscussMessage, isSystemInstructionMessage, createResponseBatchId, createResponseRoundId, getLatestStateValues, getLatestCharacterStateValues, compareChatMessages, isSessionStreamingEnabled } from "@/lib/chat-storage";
 import { cleanStreamText, splitStreamPreviewSegments, stripLiteralTexts, stripXmlTagBlocks } from "@/lib/stream-preview";
+import { stripVoiceTags } from "@/lib/voice-tags";
 import type { StateValue } from "@/lib/chat-storage";
 import { parseStateValues, mergeStateValues } from "@/lib/state-value-parser";
 import { parseAIResponse, type ParsedMessagePart } from "@/lib/rich-message-parser";
@@ -2952,7 +2953,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 return m.mediaData?.label ? `发了一张照片: ${m.mediaData.label}` : "发了一张照片";
             }
             if (m.mediaType === "location") return `分享了位置: ${m.mediaData?.label || ""}`.trim();
-            if (m.mediaType === "audio") return `发了一条语音: ${m.mediaData?.label || ""}`.trim();
+            if (m.mediaType === "audio") return `发了一条语音: ${stripVoiceTags(m.mediaData?.label || "")}`.trim();
             if (m.mediaType === "music_share") return `分享了音乐: ${m.mediaData?.musicTitle || ""}`.trim();
             if (m.mediaType === "xiaohongshu_note_share") return `分享了一条小红书帖子: ${m.mediaData?.xiaohongshuTitle || ""}`.trim();
             if (m.mediaType === "app_card") return `分享了${m.mediaData?.appName || "APP"}卡片: ${m.mediaData?.appCardTitle || m.mediaData?.appCardSummary || ""}`.trim();
@@ -4398,7 +4399,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         setEditingResponseContent("");
         setEditingMessageId(msg.id);
         // 语音条的文字存在 mediaData.label 里，content 是空的
-        setEditingContent(msg.mediaType === "audio" ? (msg.mediaData?.label || msg.content) : msg.content);
+        setEditingContent(msg.mediaType === "audio" ? stripVoiceTags(msg.mediaData?.label || msg.content) : msg.content);
         setActiveMessageId(null);
     };
 
@@ -4908,7 +4909,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     <button onClick={() => (m.role === "assistant" ? handleEditResponseStart(m) : handleEditMessageStart(m))} className="ctx-menu-btn">
                         {m.role === "assistant" && (m.rawResponseText || m.editableResponseText) ? "编辑回复" : "编辑"}
                     </button>
-                    {m.mediaType === "audio" && m.mediaData?.label && (
+                    {m.mediaType === "audio" && !!stripVoiceTags(m.mediaData?.label || "") && (
                         <button onClick={() => { setVoiceTextIds(prev => { const next = new Set(prev); if (next.has(m.id)) next.delete(m.id); else next.add(m.id); return next; }); setActiveMessageId(null); }} className="ctx-menu-btn">转文字</button>
                     )}
                     {m.role === "user" && (
@@ -6063,12 +6064,12 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                 )}
                             </div>
                             {/* Voice message: text transcription bubble */}
-                            {renderMsg.mediaType === "audio" && voiceTextIds.has(msg.id) && renderMsg.mediaData?.label && (
+                            {renderMsg.mediaType === "audio" && voiceTextIds.has(msg.id) && !!stripVoiceTags(renderMsg.mediaData?.label || "") && (
                                 <div className={`chat-msg-wrapper`} data-role={uiRole(msg)} style={{ marginTop: -12 }}>
                                     {msg.role !== "user" && <div className="w-[40px] shrink-0" />}
                                     <div className="voice-msg-text-bubble">
                                         <BilingualTextBlock
-                                            text={msg.displayProjected ? (renderMsg.mediaData?.label || "") : renderDisplayText(renderMsg.mediaData?.label || "", msg.role === "user" ? 1 : 2, false)}
+                                            text={stripVoiceTags(msg.displayProjected ? (renderMsg.mediaData?.label || "") : renderDisplayText(renderMsg.mediaData?.label || "", msg.role === "user" ? 1 : 2, false))}
                                             mode="markdown"
                                             defaultExpanded={session.collapseBilingualTranslation !== false ? false : true}
                                         />
